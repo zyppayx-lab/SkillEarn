@@ -1,0 +1,21 @@
+{
+  "name": "enterprise-fintech-backend",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "ioredis": "^5.4.1",
+    "dotenv": "^16.4.5",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "axios": "^1.6.8",
+    "helmet": "^7.1.0",
+    "cors": "^2.8.5",
+    "pino": "^9.3.2"
+  }
+}
