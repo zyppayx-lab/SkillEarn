@@ -1,14 +1,16 @@
 // src/core/fraud.engine.js
 
-exports.scoreTransaction = ({ amount, userHistory }) => {
+exports.evaluateUser = ({ ip, device, velocity, walletActivity }) => {
   let score = 0;
 
-  if (amount > 1000) score += 30;
-  if (userHistory?.failedWithdrawals > 3) score += 40;
-  if (userHistory?.newUser) score += 20;
+  if (velocity > 10) score += 40;
+  if (walletActivity.largeWithdrawals) score += 30;
+  if (device?.reused === true) score += 20;
 
   return {
     score,
-    risk: score > 70 ? 'HIGH' : score > 40 ? 'MEDIUM' : 'LOW'
+    risk:
+      score > 70 ? 'BLOCK' :
+      score > 40 ? 'REVIEW' : 'CLEAR'
   };
 };
