@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: fintech-api
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node src/server.js
