@@ -1,32 +1,51 @@
-const service = require("./nowpayments.service");
+// ===========================================
+// UPDATED: src/integrations/payments/providers/nowpayments.webhook.js
+// ===========================================
+
+const service = require('./nowpayments.service');
 
 async function webhook(req, res) {
   try {
-    const signature = req.headers["x-nowpayments-sig"];
 
-    const isValid = await service.verifySignature(req.body, signature);
+    const signature =
+      req.headers['x-nowpayments-sig'];
+
+    const isValid =
+      await service.verifySignature(
+        req.body,
+        signature
+      );
 
     if (!isValid) {
-      return res.status(403).json({ error: "Invalid signature" });
+      return res.status(403).json({
+        error: 'Invalid signature'
+      });
     }
 
     const payment = req.body;
 
-    // IMPORTANT FINTECH LOGIC
-    if (payment.payment_status === "finished") {
+    if (payment.payment_status === 'finished') {
 
-      // 1. credit wallet
-      // 2. update ledger
-      // 3. release escrow if needed
+      console.log(
+        'CRYPTO PAYMENT SUCCESS:',
+        payment.payment_id
+      );
 
-      console.log("PAYMENT SUCCESS:", payment.payment_id);
+      // TODO:
+      // Credit user wallet
+      // Save transaction
+      // Send notification
     }
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({
+      success: true
+    });
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Webhook error" });
+
+    return res.status(500).json({
+      error: 'Webhook error'
+    });
   }
 }
 
