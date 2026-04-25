@@ -1,10 +1,15 @@
-const axios = require("axios");
+// ===========================================
+// UPDATED: src/integrations/payments/providers/nowpayments.provider.js
+// Clean version
+// ===========================================
+
+const axios = require('axios');
 
 const BASE_URL = process.env.NOWPAYMENTS_BASE_URL;
 
 const headers = {
-  "x-api-key": process.env.NOWPAYMENTS_API_KEY,
-  "Content-Type": "application/json",
+  'x-api-key': process.env.NOWPAYMENTS_API_KEY,
+  'Content-Type': 'application/json'
 };
 
 async function getStatus() {
@@ -22,18 +27,17 @@ async function getMinAmount(currency_from, currency_to) {
     `${BASE_URL}/min-amount?currency_from=${currency_from}&currency_to=${currency_to}`,
     { headers }
   );
+
   return res.data;
 }
 
 async function createPayment(data) {
-  const res = await axios.post(`${BASE_URL}/payment`, data, { headers });
-  return res.data;
-}
+  const res = await axios.post(
+    `${BASE_URL}/payment`,
+    data,
+    { headers }
+  );
 
-async function getPaymentStatus(payment_id) {
-  const res = await axios.get(`${BASE_URL}/payment/${payment_id}`, {
-    headers,
-  });
   return res.data;
 }
 
@@ -41,6 +45,5 @@ module.exports = {
   getStatus,
   getCurrencies,
   getMinAmount,
-  createPayment,
-  getPaymentStatus,
+  createPayment
 };
