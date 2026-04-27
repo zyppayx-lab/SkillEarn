@@ -6,11 +6,14 @@ exports.paystackWebhook = async (req, res) => {
   const event = req.body;
 
   if (event.event === 'charge.success') {
+
     await wallet.credit({
       userId: event.data.metadata.userId,
       amount: event.data.amount / 100,
-      ref: event.data.reference
+      ref: event.data.reference,
+      type: 'BUSINESS'
     });
+
   }
 
   res.sendStatus(200);
