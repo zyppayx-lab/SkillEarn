@@ -2,35 +2,34 @@ const axios = require('axios');
 const env = require('../config/env');
 
 module.exports = async (token, expectedAction) => {
-  if (!token) throw new Error('Captcha required');
+  if (!token) {
+    throw new Error('Captcha required');
+  }
+
+  const params = new URLSearchParams();
+  params.append('secret', env.RECAPTCHA_SECRET);
+  params.append('response', token);
 
   const res = await axios.post(
     'https://www.google.com/recaptcha/api/siteverify',
-    null,
-    {
-      params: {
-        secret: env.RECAPTCHA_SECRET,
-        response: token
-      }
-    }
+    params
   );
 
   const data = res.data;
 
-  // 1. Must be successful
+  // ❌ Invalid token or expired
   if (!data.success) {
-    throw new Error('Captcha verification failed (invalid token)');
+    throw new Error(`Captcha verification failed`);
   }
 
-  // 2. MUST match action (v3 requirement)
+  // ❌ Action mismatch (VERY IMPORTANT for v3)
   if (expectedAction && data.action !== expectedAction) {
     throw new Error('Captcha action mismatch');
   }
 
-  // 3. Score check (VERY IMPORTANT)
-  // Google recommends 0.5, but fintech apps should use 0.6–0.8
+  // ❌ Bot risk check
   if (data.score < 0.5) {
-    throw new Error('Captcha risk score too low (bot detected)');
+    throw new Error('Captcha risk too high');
   }
 
   return {
