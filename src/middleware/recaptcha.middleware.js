@@ -17,25 +17,28 @@ module.exports = async (token, expectedAction) => {
 
   const data = res.data;
 
-  // ❌ Invalid token or expired
+  // ❌ Token invalid / expired
   if (!data.success) {
-    throw new Error(`Captcha verification failed`);
+    throw new Error('Captcha verification failed');
   }
 
-  // ❌ Action mismatch (VERY IMPORTANT for v3)
-  if (expectedAction && data.action !== expectedAction) {
-    throw new Error('Captcha action mismatch');
-  }
+  // ❌ Score check (main protection layer)
+  const score = data.score ?? 0;
 
-  // ❌ Bot risk check
-  if (data.score < 0.5) {
+  if (score < 0.5) {
     throw new Error('Captcha risk too high');
+  }
+
+  // ⚠️ Action check (ONLY if present)
+  // Some responses may not include action reliably
+  if (expectedAction && data.action && data.action !== expectedAction) {
+    throw new Error('Captcha action mismatch');
   }
 
   return {
     success: true,
-    score: data.score,
-    action: data.action,
-    hostname: data.hostname
+    score,
+    action: data.action || null,
+    hostname: data.hostname || null
   };
 };
