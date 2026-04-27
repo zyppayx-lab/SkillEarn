@@ -1,6 +1,4 @@
-// ===========================================
-// UPDATED: src/integrations/payments/providers/nowpayments.service.js
-// ===========================================
+// src/integrations/payments/providers/nowpayments.service.js
 
 const provider = require('./nowpayments.provider');
 const crypto = require('crypto');
@@ -11,27 +9,14 @@ class NowPaymentsService {
     return await provider.getStatus();
   }
 
-  async listCurrencies() {
-    return await provider.getCurrencies();
-  }
-
-  async calculateMinAmount(from, to) {
-    return await provider.getMinAmount(from, to);
-  }
-
-  async createDeposit({
-    amount,
-    currency,
-    orderId
-  }) {
+  async createDeposit({ amount, currency, orderId }) {
 
     const payload = {
       price_amount: amount,
       price_currency: 'usd',
       pay_currency: currency,
       order_id: orderId,
-      ipn_callback_url:
-        `${process.env.APP_URL}/api/payments/nowpayments/webhook`
+      ipn_callback_url: `${process.env.APP_URL}/api/payments/nowpayments/webhook`
     };
 
     const payment = await provider.createPayment(payload);
@@ -46,17 +31,10 @@ class NowPaymentsService {
   }
 
   async verifySignature(body, signature) {
-
-    const sorted = JSON.stringify(
-      body,
-      Object.keys(body).sort()
-    );
+    const sorted = JSON.stringify(body, Object.keys(body).sort());
 
     const hash = crypto
-      .createHmac(
-        'sha512',
-        process.env.NOWPAYMENTS_IPN_SECRET
-      )
+      .createHmac('sha512', process.env.NOWPAYMENTS_IPN_SECRET)
       .update(sorted)
       .digest('hex');
 
