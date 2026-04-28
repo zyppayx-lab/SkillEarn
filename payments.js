@@ -1,25 +1,28 @@
 // payments.js
-// Save this file as: payments.js
-// Business must pay before task is created
+// REAL MONEY VERSION
+// Paystack verified payments + Crypto invoice structure
 
 const express = require("express");
-const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 
-/* =========================
-   AUTH MIDDLEWARE
-========================= */
+/* ==========================================
+   AUTH
+========================================== */
 function auth(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.replace("Bearer ", "");
+  const header =
+    req.headers.authorization || "";
+
+  const token =
+    header.replace("Bearer ", "");
 
   try {
     req.user = jwt.verify(
       token,
       process.env.JWT_SECRET
     );
+
     next();
   } catch {
     return res.status(401).json({
@@ -28,10 +31,11 @@ function auth(req, res, next) {
   }
 }
 
-/* =========================
-   ONLY BUSINESS / ADMIN
-========================= */
-function businessOnly(req, res, next) {
+function businessOnly(
+  req,
+  res,
+  next
+) {
   if (
     req.user.role !== "vendor" &&
     req.user.role !== "admin"
@@ -44,10 +48,9 @@ function businessOnly(req, res, next) {
   next();
 }
 
-/* ==================================================
-   PAYSTACK PAYMENT INIT
-   Business pays before posting task
-================================================== */
+/* ==========================================
+   PAYSTACK INIT PAYMENT
+========================================== */
 router.post(
   "/api/paystack/create-task-payment",
   auth,
@@ -63,28 +66,105 @@ router.post(
       const reference =
         "TASK_" + Date.now();
 
+      const response =
+        await fetch(
+          "https://api.paystack.co/transaction/initialize",
+          {
+            method: "POST",
+            headers: {
+              Authorization:
+                "Bearer " +
+                process.env
+                  .PAYSTACK_SECRET_KEY,
+              "Content-Type":
+                "application/json"
+            },
+            body: JSON.stringify({
+              email,
+              amount:
+                amount * 100,
+              reference,
+              callback_url:
+                "https://yourdomain.com/payment-success"
+            })
+          }
+        );
+
+      const data =
+        await response.json();
+
       res.json({
-        payment_method: "paystack",
-        reference,
-        amount,
-        email,
-        task_title,
-        message:
-          "Use this reference with Paystack initialize API"
+        payment_url:
+          data.data
+            .authorization_url,
+        reference
       });
 
-    } catch {
+    } catch (error) {
       res.status(500).json({
-        message: "Payment failed"
+        message:
+          "Unable to initialize payment"
       });
     }
   }
 );
 
-/* ==================================================
-   CRYPTO PAYMENT
-   BTC / ETH / USDT / LTC etc
-================================================== */
+/* ==========================================
+   VERIFY PAYSTACK
+========================================== */
+router.get(
+  "/api/paystack/verify/:ref",
+  auth,
+  businessOnly,
+  async (req, res) => {
+    try {
+      const ref =
+        req.params.ref;
+
+      const response =
+        await fetch(
+          "https://api.paystack.co/transaction/verify/" +
+            ref,
+          {
+            headers: {
+              Authorization:
+                "Bearer " +
+                process.env
+                  .PAYSTACK_SECRET_KEY
+            }
+          }
+        );
+
+      const data =
+        await response.json();
+
+      if (
+        data.data.status ===
+        "success"
+      ) {
+        return res.json({
+          paid: true,
+          reference: ref
+        });
+      }
+
+      res.json({
+        paid: false
+      });
+
+    } catch {
+      res.status(500).json({
+        message:
+          "Verification failed"
+      });
+    }
+  }
+);
+
+/* ==========================================
+   CRYPTO CREATE PAYMENT
+   Replace provider URL with NOWPayments etc
+========================================== */
 router.post(
   "/api/crypto/create-task-payment",
   auth,
@@ -92,65 +172,40 @@ router.post(
   async (req, res) => {
     try {
       const {
-        coin,
-        amount,
-        task_title
+        price_amount,
+        price_currency,
+        pay_currency
       } = req.body;
 
-      const ref =
-        "CRYPTO_" + Date.now();
+      const response =
+        await fetch(
+          "https://api.nowpayments.io/v1/payment",
+          {
+            method: "POST",
+            headers: {
+              "x-api-key":
+                process.env
+                  .CRYPTO_API_KEY,
+              "Content-Type":
+                "application/json"
+            },
+            body: JSON.stringify({
+              price_amount,
+              price_currency,
+              pay_currency
+            })
+          }
+        );
 
-      const fakeWallet =
-        "wallet_" +
-        crypto.randomBytes(8).toString("hex");
+      const data =
+        await response.json();
 
-      res.json({
-        payment_method: "crypto",
-        reference: ref,
-        coin,
-        amount,
-        wallet_address: fakeWallet,
-        task_title,
-        status: "Awaiting payment"
-      });
+      res.json(data);
 
     } catch {
       res.status(500).json({
-        message: "Crypto payment failed"
-      });
-    }
-  }
-);
-
-/* ==================================================
-   VERIFY PAYMENT THEN CREATE TASK
-================================================== */
-router.post(
-  "/api/business/task/create-paid",
-  auth,
-  businessOnly,
-  async (req, res) => {
-    try {
-      const {
-        payment_reference,
-        title,
-        description,
-        reward
-      } = req.body;
-
-      // Here you verify Paystack or Crypto webhook first
-
-      res.json({
         message:
-          "Payment confirmed. Task can now be created.",
-        payment_reference,
-        title,
-        reward
-      });
-
-    } catch {
-      res.status(500).json({
-        message: "Unable to create task"
+          "Crypto payment failed"
       });
     }
   }
