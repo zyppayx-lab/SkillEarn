@@ -1,26 +1,28 @@
 // withdraw.js
-// Save this file as: withdraw.js
-// Crypto withdrawal = automatic
-// Paystack withdrawal = manual review
+// REAL MONEY VERSION
+// Crypto automatic payouts + Paystack manual withdrawals
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const crypto = require("crypto");
 
 const router = express.Router();
 
-/* =========================
+/* ==========================================
    AUTH
-========================= */
+========================================== */
 function auth(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.replace("Bearer ", "");
+  const header =
+    req.headers.authorization || "";
+
+  const token =
+    header.replace("Bearer ", "");
 
   try {
     req.user = jwt.verify(
       token,
       process.env.JWT_SECRET
     );
+
     next();
   } catch {
     return res.status(401).json({
@@ -29,9 +31,9 @@ function auth(req, res, next) {
   }
 }
 
-/* ==================================================
-   AUTO CRYPTO WITHDRAWAL
-================================================== */
+/* ==========================================
+   CRYPTO AUTO WITHDRAWAL
+========================================== */
 router.post(
   "/api/withdraw/crypto",
   auth,
@@ -43,23 +45,36 @@ router.post(
         wallet_address
       } = req.body;
 
-      const reference =
-        "CRW_" +
-        crypto.randomBytes(6).toString("hex");
+      /* Check user balance here */
 
-      // Connect your crypto provider API here
-      // Binance / NOWPayments / Coinbase
+      const response =
+        await fetch(
+          "https://api.nowpayments.io/v1/payout",
+          {
+            method: "POST",
+            headers: {
+              "x-api-key":
+                process.env
+                  .CRYPTO_API_KEY,
+              "Content-Type":
+                "application/json"
+            },
+            body: JSON.stringify({
+              currency: coin,
+              amount,
+              address:
+                wallet_address
+            })
+          }
+        );
+
+      const data =
+        await response.json();
 
       res.json({
         status: "success",
-        method: "crypto",
         automatic: true,
-        coin,
-        amount,
-        wallet_address,
-        reference,
-        message:
-          "Crypto withdrawal sent automatically"
+        payout: data
       });
 
     } catch {
@@ -71,9 +86,9 @@ router.post(
   }
 );
 
-/* ==================================================
+/* ==========================================
    PAYSTACK MANUAL WITHDRAWAL
-================================================== */
+========================================== */
 router.post(
   "/api/withdraw/paystack",
   auth,
@@ -86,61 +101,40 @@ router.post(
         account_number
       } = req.body;
 
-      const reference =
-        "PSW_" +
-        crypto.randomBytes(6).toString("hex");
-
-      // Save to DB pending admin approval
+      /* Save pending request in DB */
 
       res.json({
         status: "pending",
-        method: "paystack",
-        automatic: false,
+        method:
+          "paystack manual",
         amount,
         bank_name,
         account_name,
         account_number,
-        reference,
         message:
-          "Withdrawal submitted for manual processing"
+          "Admin will process manually"
       });
 
     } catch {
       res.status(500).json({
         message:
-          "Paystack withdrawal failed"
+          "Withdrawal failed"
       });
     }
   }
 );
 
-/* ==================================================
-   WITHDRAWAL STATUS
-================================================== */
+/* ==========================================
+   WITHDRAW STATUS
+========================================== */
 router.get(
   "/api/withdraw/status/:ref",
   auth,
   async (req, res) => {
     res.json({
-      reference: req.params.ref,
+      reference:
+        req.params.ref,
       status: "pending"
-    });
-  }
-);
-
-/* ==================================================
-   WITHDRAWAL RULES
-================================================== */
-router.get(
-  "/api/withdraw/info",
-  auth,
-  async (req, res) => {
-    res.json({
-      crypto:
-        "Automatic instant processing",
-      paystack:
-        "Manual admin approval",
-      minimum_withdrawal: 1000
     });
   }
 );
