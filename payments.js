@@ -1,6 +1,7 @@
 // payments.js
-// REAL MONEY VERSION
-// Paystack verified payments + Crypto invoice structure
+// REAL MONEY VERSION UPDATED
+// Paystack + Crypto
+// Supports Task, Freelance, Hiring, Influencer
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -49,10 +50,56 @@ function businessOnly(
 }
 
 /* ==========================================
-   PAYSTACK INIT PAYMENT
+   HELPERS
+========================================== */
+function getPrefix(purpose) {
+  const prefixes = {
+    task: "TASK_",
+    freelance: "FREE_",
+    hiring: "HIR_",
+    influencer: "INF_"
+  };
+
+  return prefixes[purpose];
+}
+
+async function initPaystack(
+  email,
+  amount,
+  reference
+) {
+  const response =
+    await fetch(
+      "https://api.paystack.co/transaction/initialize",
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            "Bearer " +
+            process.env
+              .PAYSTACK_SECRET_KEY,
+          "Content-Type":
+            "application/json"
+        },
+        body: JSON.stringify({
+          email,
+          amount:
+            amount * 100,
+          reference,
+          callback_url:
+            "https://yourdomain.com/payment-success"
+        })
+      }
+    );
+
+  return await response.json();
+}
+
+/* ==========================================
+   CREATE PAYSTACK PAYMENT
 ========================================== */
 router.post(
-  "/api/paystack/create-task-payment",
+  "/api/paystack/create-payment",
   auth,
   businessOnly,
   async (req, res) => {
@@ -60,38 +107,29 @@ router.post(
       const {
         email,
         amount,
-        task_title
+        title,
+        purpose
       } = req.body;
 
-      const reference =
-        "TASK_" + Date.now();
+      const prefix =
+        getPrefix(purpose);
 
-      const response =
-        await fetch(
-          "https://api.paystack.co/transaction/initialize",
-          {
-            method: "POST",
-            headers: {
-              Authorization:
-                "Bearer " +
-                process.env
-                  .PAYSTACK_SECRET_KEY,
-              "Content-Type":
-                "application/json"
-            },
-            body: JSON.stringify({
-              email,
-              amount:
-                amount * 100,
-              reference,
-              callback_url:
-                "https://yourdomain.com/payment-success"
-            })
-          }
-        );
+      if (!prefix) {
+        return res.status(400).json({
+          message:
+            "Invalid purpose"
+        });
+      }
+
+      const reference =
+        prefix + Date.now();
 
       const data =
-        await response.json();
+        await initPaystack(
+          email,
+          amount,
+          reference
+        );
 
       res.json({
         payment_url:
@@ -99,8 +137,7 @@ router.post(
             .authorization_url,
         reference
       });
-
-    } catch (error) {
+    } catch {
       res.status(500).json({
         message:
           "Unable to initialize payment"
@@ -110,7 +147,7 @@ router.post(
 );
 
 /* ==========================================
-   VERIFY PAYSTACK
+   VERIFY PAYSTACK PAYMENT
 ========================================== */
 router.get(
   "/api/paystack/verify/:ref",
@@ -151,7 +188,6 @@ router.get(
       res.json({
         paid: false
       });
-
     } catch {
       res.status(500).json({
         message:
@@ -162,20 +198,34 @@ router.get(
 );
 
 /* ==========================================
-   CRYPTO CREATE PAYMENT
-   Replace provider URL with NOWPayments etc
+   CREATE CRYPTO PAYMENT
 ========================================== */
 router.post(
-  "/api/crypto/create-task-payment",
+  "/api/crypto/create-payment",
   auth,
   businessOnly,
   async (req, res) => {
     try {
       const {
-        price_amount,
-        price_currency,
-        pay_currency
+        amount,
+        pay_currency,
+        purpose,
+        title
       } = req.body;
+
+      const prefix =
+        getPrefix(purpose);
+
+      if (!prefix) {
+        return res.status(400).json({
+          message:
+            "Invalid purpose"
+        });
+      }
+
+      const reference =
+        "CRYPTO_" +
+        Date.now();
 
       const response =
         await fetch(
@@ -190,9 +240,16 @@ router.post(
                 "application/json"
             },
             body: JSON.stringify({
-              price_amount,
-              price_currency,
-              pay_currency
+              price_amount:
+                amount,
+              price_currency:
+                "usd",
+              pay_currency,
+              order_id:
+                reference,
+              order_description:
+                title ||
+                purpose
             })
           }
         );
@@ -200,8 +257,10 @@ router.post(
       const data =
         await response.json();
 
-      res.json(data);
-
+      res.json({
+        reference,
+        ...data
+      });
     } catch {
       res.status(500).json({
         message:
