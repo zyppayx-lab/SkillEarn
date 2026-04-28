@@ -1,95 +1,118 @@
 // security.js
-// Save this file as: security.js
-// Advanced protection for production deploy
-
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const helmet = require("helmet");
 
 const router = express.Router();
 
-/* ==================================================
-   GLOBAL SECURITY HEADERS
-================================================== */
+/* ==========================================
+   SECURITY HEADERS
+========================================== */
 function applySecurity(app) {
   app.use(
     helmet({
-      contentSecurityPolicy: false
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false
     })
   );
 }
 
-/* ==================================================
-   LOGIN BRUTE FORCE PROTECTION
-================================================== */
+/* ==========================================
+   LIMITERS
+========================================== */
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
-    message:
-      "Too many login attempts. Try later."
+    message: "Too many login attempts. Try later."
   }
 });
 
-/* ==================================================
-   API GENERAL LIMITER
-================================================== */
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
-    message:
-      "Too many requests"
+    message: "Too many requests"
   }
 });
 
-/* ==================================================
-   PAYMENT LIMITER
-================================================== */
 const paymentLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
-    message:
-      "Too many payment requests"
+    message: "Too many payment requests"
   }
 });
 
-/* ==================================================
-   WITHDRAWAL LIMITER
-================================================== */
 const withdrawLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
-    message:
-      "Withdrawal limit reached"
+    message: "Withdrawal limit reached"
   }
 });
 
-/* ==================================================
-   SUSPICIOUS REQUEST BLOCKER
-================================================== */
+/* ==========================================
+   SMART REQUEST FILTER
+========================================== */
 router.use((req, res, next) => {
-  const agent =
-    req.headers["user-agent"] || "";
+  const ua =
+    (req.headers["user-agent"] || "")
+      .toLowerCase();
+
+  const url =
+    (req.originalUrl || "")
+      .toLowerCase();
+
+  // allow health checks
+  if (
+    url === "/" ||
+    url === "/readyz" ||
+    url === "/livez" ||
+    url === "/db-check"
+  ) {
+    return next();
+  }
+
+  // allow webhooks
+  if (url.includes("/webhook")) {
+    return next();
+  }
+
+  // block obvious scanners only
+  const badAgents = [
+    "sqlmap",
+    "nikto",
+    "acunetix",
+    "masscan",
+    "nmap",
+    "dirbuster"
+  ];
 
   if (
-    agent.includes("sqlmap") ||
-    agent.includes("curl")
+    badAgents.some(word =>
+      ua.includes(word)
+    )
   ) {
     return res.status(403).json({
-      message:
-        "Blocked request"
+      message: "Blocked request"
     });
   }
 
   next();
 });
 
-/* ==================================================
-   EXPORTS
-================================================== */
+/* ==========================================
+   EXPORT
+========================================== */
 module.exports = {
   applySecurity,
   loginLimiter,
