@@ -1,7 +1,6 @@
 // server.js
 // SkillEarn Clean Production Backend
-// SQL removed from server.js
-// Run database.sql manually in PostgreSQL editor
+// UPDATED: Added payment webhooks
 
 require("dotenv").config();
 
@@ -19,6 +18,7 @@ const app = express();
    ROUTES
 ========================= */
 const paymentRoutes = require("./payments");
+const webhookRoutes = require("./payments-webhook");
 const adminRoutes = require("./admin");
 const userRoutes = require("./users");
 const businessRoutes = require("./business");
@@ -52,6 +52,12 @@ const pool = new Pool({
 app.locals.pool = pool;
 
 /* =========================
+   WEBHOOKS FIRST
+   raw body needed before express.json()
+========================= */
+app.use(webhookRoutes);
+
+/* =========================
    CORE MIDDLEWARE
 ========================= */
 app.use(cors({
@@ -75,13 +81,12 @@ app.use(session({
   }
 }));
 
-/* ==================================================
+/* =========================
    SECURITY
-================================================== */
+========================= */
 applySecurity(app);
 
 app.use(apiLimiter);
-
 app.use(securityRoutes);
 
 app.use(
@@ -115,7 +120,7 @@ app.use(
 );
 
 /* =========================
-   ROUTES
+   MAIN ROUTES
 ========================= */
 app.use(paymentRoutes);
 app.use(adminRoutes);
@@ -162,7 +167,7 @@ app.get(
           "Database connected"
       });
 
-    } catch (error) {
+    } catch {
       res.status(500).json({
         status:
           "Database failed"
