@@ -1,6 +1,6 @@
 // server.js
-// SkillEarn Clean Production Backend
-// UPDATED: Added payment webhooks
+// FIXED FOR USER JSON BODY + WEBHOOKS
+// Main issue: webhook middleware mounted globally before express.json()
 
 require("dotenv").config();
 
@@ -9,9 +9,6 @@ const cors = require("cors");
 const session = require("express-session");
 const { Pool } = require("pg");
 
-/* =========================
-   APP
-========================= */
 const app = express();
 
 /* =========================
@@ -52,13 +49,7 @@ const pool = new Pool({
 app.locals.pool = pool;
 
 /* =========================
-   WEBHOOKS FIRST
-   raw body needed before express.json()
-========================= */
-app.use(webhookRoutes);
-
-/* =========================
-   CORE MIDDLEWARE
+   CORE MIDDLEWARE FIRST
 ========================= */
 app.use(cors({
   origin: true,
@@ -66,6 +57,9 @@ app.use(cors({
 }));
 
 app.use(express.json());
+app.use(express.urlencoded({
+  extended: true
+}));
 
 app.use(session({
   secret:
@@ -120,6 +114,13 @@ app.use(
 );
 
 /* =========================
+   WEBHOOK ROUTES AFTER JSON
+   (webhook file should use router.post(...)
+   with express.raw only on specific routes)
+========================= */
+app.use(webhookRoutes);
+
+/* =========================
    MAIN ROUTES
 ========================= */
 app.use(paymentRoutes);
@@ -129,7 +130,7 @@ app.use(businessRoutes);
 app.use(withdrawRoutes);
 
 /* =========================
-   HEALTH CHECK
+   HEALTH
 ========================= */
 app.get("/", (req, res) => {
   res.json({
@@ -151,33 +152,27 @@ app.get("/livez", (req, res) => {
   });
 });
 
-/* =========================
-   DATABASE TEST
-========================= */
-app.get(
-  "/db-check",
-  async (req, res) => {
-    try {
-      await pool.query(
-        "SELECT NOW()"
-      );
+app.get("/db-check", async (req, res) => {
+  try {
+    await pool.query(
+      "SELECT NOW()"
+    );
 
-      res.json({
-        status:
-          "Database connected"
-      });
+    res.json({
+      status:
+        "Database connected"
+    });
 
-    } catch {
-      res.status(500).json({
-        status:
-          "Database failed"
-      });
-    }
+  } catch {
+    res.status(500).json({
+      status:
+        "Database failed"
+    });
   }
-);
+});
 
 /* =========================
-   404 HANDLER
+   404
 ========================= */
 app.use((req, res) => {
   res.status(404).json({
@@ -187,7 +182,7 @@ app.use((req, res) => {
 });
 
 /* =========================
-   ERROR HANDLER
+   ERROR
 ========================= */
 app.use(
   (err, req, res, next) => {
@@ -201,7 +196,7 @@ app.use(
 );
 
 /* =========================
-   START SERVER
+   START
 ========================= */
 const PORT =
   process.env.PORT || 5000;
