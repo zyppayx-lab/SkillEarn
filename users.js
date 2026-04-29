@@ -41,23 +41,28 @@ function auth(req, res, next) {
 /* ==========================================
    SEND OTP EMAIL
 ========================================== */
-async function sendOTP(
-  email,
-  code
-) {
-  await resend.emails.send({
-    from:
-      process.env.FROM_EMAIL,
-    to: email,
-    subject:
-      "Verify your SkillEarn account",
-    html: `
-      <h2>SkillEarn Verification</h2>
-      <p>Your OTP Code:</p>
-      <h1>${code}</h1>
-      <p>This code expires in 10 minutes.</p>
-    `
-  });
+async function sendOTP(email, code) {
+  try {
+    console.log("Sending OTP to:", email);
+    console.log("FROM_EMAIL:", process.env.FROM_EMAIL);
+
+    const response = await resend.emails.send({
+      from: process.env.FROM_EMAIL,
+      to: email,
+      subject: "Verify your SkillEarn account",
+      html: `
+        <h2>SkillEarn Verification</h2>
+        <p>Your OTP Code:</p>
+        <h1>${code}</h1>
+        <p>This code expires in 10 minutes.</p>
+      `
+    });
+
+    console.log("EMAIL RESPONSE:", JSON.stringify(response));
+
+  } catch (error) {
+    console.error("EMAIL ERROR:", error);
+  }
 }
 
 /* ==========================================
