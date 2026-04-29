@@ -1,7 +1,6 @@
 // users.js
-// FIXED VERSION
-// Main issue: users table likely missing phone column or role defaults.
-// This version preserves all features.
+// UPDATED DEBUG VERSION
+// Shows real SQL errors for registration/login
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -97,7 +96,7 @@ router.post(
         )
         VALUES
         ($1,$2,$3,$4,'user',0,'active')
-      `,
+        `,
         [
           name,
           email,
@@ -116,7 +115,7 @@ router.post(
 
       res.status(500).json({
         message:
-          "Registration failed"
+          error.message
       });
     }
   }
@@ -174,8 +173,7 @@ router.post(
             id: user.id,
             email: user.email,
             role:
-              user.role ||
-              "user"
+              user.role || "user"
           },
           process.env.JWT_SECRET,
           {
@@ -192,8 +190,7 @@ router.post(
           name: user.name,
           email: user.email,
           role:
-            user.role ||
-            "user"
+            user.role || "user"
         }
       });
 
@@ -202,7 +199,7 @@ router.post(
 
       res.status(500).json({
         message:
-          "Login failed"
+          error.message
       });
     }
   }
@@ -222,11 +219,12 @@ router.get(
       const result =
         await pool.query(
           `
-          SELECT id,name,email,phone,
+          SELECT
+          id,name,email,phone,
           role,balance,status
           FROM users
           WHERE id=$1
-        `,
+          `,
           [req.user.id]
         );
 
@@ -234,10 +232,10 @@ router.get(
         result.rows[0]
       );
 
-    } catch {
+    } catch (error) {
       res.status(500).json({
         message:
-          "Unable to fetch profile"
+          error.message
       });
     }
   }
@@ -260,7 +258,7 @@ router.get(
           SELECT balance
           FROM users
           WHERE id=$1
-        `,
+          `,
           [req.user.id]
         );
 
@@ -271,10 +269,10 @@ router.get(
         currency: "NGN"
       });
 
-    } catch {
+    } catch (error) {
       res.status(500).json({
         message:
-          "Wallet fetch failed"
+          error.message
       });
     }
   }
@@ -309,7 +307,7 @@ router.get(
           FROM transactions
           WHERE user_id=$1
           ORDER BY id DESC
-        `,
+          `,
           [req.user.id]
         );
 
@@ -317,10 +315,10 @@ router.get(
         result.rows
       );
 
-    } catch {
+    } catch (error) {
       res.status(500).json({
         message:
-          "Unable to fetch transactions"
+          error.message
       });
     }
   }
@@ -344,7 +342,7 @@ router.get(
           FROM notifications
           WHERE user_id=$1
           ORDER BY id DESC
-        `,
+          `,
           [req.user.id]
         );
 
@@ -352,10 +350,10 @@ router.get(
         result.rows
       );
 
-    } catch {
+    } catch (error) {
       res.status(500).json({
         message:
-          "Unable to fetch notifications"
+          error.message
       });
     }
   }
