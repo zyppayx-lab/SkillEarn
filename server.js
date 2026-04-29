@@ -1,6 +1,6 @@
 // server.js
-// FIXED FOR USER JSON BODY + WEBHOOKS
-// Main issue: webhook middleware mounted globally before express.json()
+// FINAL UPDATED PRODUCTION VERSION
+// Uses updated security.js + webhook safe ordering + OTP protection
 
 require("dotenv").config();
 
@@ -11,78 +11,132 @@ const { Pool } = require("pg");
 
 const app = express();
 
-/* =========================
+/* ==========================================
    ROUTES
-========================= */
-const paymentRoutes = require("./payments");
-const webhookRoutes = require("./payments-webhook");
-const adminRoutes = require("./admin");
-const userRoutes = require("./users");
-const businessRoutes = require("./business");
-const withdrawRoutes = require("./withdraw");
+========================================== */
+const paymentRoutes =
+  require("./payments");
 
+const webhookRoutes =
+  require("./payments-webhook");
+
+const adminRoutes =
+  require("./admin");
+
+const userRoutes =
+  require("./users");
+
+const businessRoutes =
+  require("./business");
+
+const withdrawRoutes =
+  require("./withdraw");
+
+/* ==========================================
+   SECURITY IMPORT
+========================================== */
 const {
   applySecurity,
   loginLimiter,
   apiLimiter,
   paymentLimiter,
   withdrawLimiter,
+  otpLimiter,
+  registerLimiter,
   router: securityRoutes
 } = require("./security");
 
-/* =========================
+/* ==========================================
    SAFE SETTINGS
-========================= */
-app.disable("x-powered-by");
+========================================== */
+app.disable(
+  "x-powered-by"
+);
 
-/* =========================
+app.set(
+  "trust proxy",
+  1
+);
+
+/* ==========================================
    DATABASE
-========================= */
+========================================== */
 const pool = new Pool({
   connectionString:
     process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  ssl:
+    process.env.NODE_ENV ===
+    "production"
+      ? {
+          rejectUnauthorized:
+            false
+        }
+      : false
 });
 
 app.locals.pool = pool;
 
-/* =========================
+/* ==========================================
    CORE MIDDLEWARE FIRST
-========================= */
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
+========================================== */
+app.use(
+  cors({
+    origin: true,
+    credentials: true
+  })
+);
 
-app.use(express.json());
-app.use(express.urlencoded({
-  extended: true
-}));
+app.use(
+  express.json({
+    limit: "2mb"
+  })
+);
 
-app.use(session({
-  secret:
-    process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure:
-      process.env.NODE_ENV ===
-      "production",
-    sameSite: "lax"
-  }
-}));
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "2mb"
+  })
+);
 
-/* =========================
+app.use(
+  session({
+    secret:
+      process.env
+        .SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure:
+        process.env
+          .NODE_ENV ===
+        "production",
+      sameSite: "lax",
+      maxAge:
+        7 *
+        24 *
+        60 *
+        60 *
+        1000
+    }
+  })
+);
+
+/* ==========================================
    SECURITY
-========================= */
+========================================== */
 applySecurity(app);
 
-app.use(apiLimiter);
-app.use(securityRoutes);
+app.use(
+  apiLimiter
+);
 
+app.use(
+  securityRoutes
+);
+
+/* LOGIN LIMITERS */
 app.use(
   "/api/auth/login",
   loginLimiter
@@ -98,6 +152,39 @@ app.use(
   loginLimiter
 );
 
+/* REGISTER LIMITERS */
+app.use(
+  "/api/auth/register",
+  registerLimiter
+);
+
+app.use(
+  "/api/business/register",
+  registerLimiter
+);
+
+/* OTP LIMITERS */
+app.use(
+  "/api/auth/resend-otp",
+  otpLimiter
+);
+
+app.use(
+  "/api/business/resend-otp",
+  otpLimiter
+);
+
+app.use(
+  "/api/auth/verify-email",
+  otpLimiter
+);
+
+app.use(
+  "/api/business/verify-email",
+  otpLimiter
+);
+
+/* PAYMENT LIMITERS */
 app.use(
   "/api/paystack",
   paymentLimiter
@@ -108,85 +195,130 @@ app.use(
   paymentLimiter
 );
 
+/* WITHDRAW LIMITERS */
 app.use(
   "/api/withdraw",
   withdrawLimiter
 );
 
-/* =========================
-   WEBHOOK ROUTES AFTER JSON
-   (webhook file should use router.post(...)
-   with express.raw only on specific routes)
-========================= */
-app.use(webhookRoutes);
+/* ==========================================
+   WEBHOOK ROUTES
+   mounted after body parser
+========================================== */
+app.use(
+  webhookRoutes
+);
 
-/* =========================
+/* ==========================================
    MAIN ROUTES
-========================= */
-app.use(paymentRoutes);
-app.use(adminRoutes);
-app.use(userRoutes);
-app.use(businessRoutes);
-app.use(withdrawRoutes);
+========================================== */
+app.use(
+  paymentRoutes
+);
 
-/* =========================
-   HEALTH
-========================= */
-app.get("/", (req, res) => {
-  res.json({
-    status:
-      "SkillEarn Backend Running",
-    mode: "Production"
-  });
-});
+app.use(
+  adminRoutes
+);
 
-app.get("/readyz", (req, res) => {
-  res.json({
-    status: "ready"
-  });
-});
+app.use(
+  userRoutes
+);
 
-app.get("/livez", (req, res) => {
-  res.json({
-    status: "live"
-  });
-});
+app.use(
+  businessRoutes
+);
 
-app.get("/db-check", async (req, res) => {
-  try {
-    await pool.query(
-      "SELECT NOW()"
-    );
+app.use(
+  withdrawRoutes
+);
 
+/* ==========================================
+   HEALTH CHECKS
+========================================== */
+app.get(
+  "/",
+  (req, res) => {
     res.json({
       status:
-        "Database connected"
-    });
-
-  } catch {
-    res.status(500).json({
-      status:
-        "Database failed"
+        "SkillEarn Backend Running",
+      mode:
+        process.env
+          .NODE_ENV ||
+        "development"
     });
   }
-});
+);
 
-/* =========================
+app.get(
+  "/readyz",
+  (req, res) => {
+    res.json({
+      status:
+        "ready"
+    });
+  }
+);
+
+app.get(
+  "/livez",
+  (req, res) => {
+    res.json({
+      status:
+        "live"
+    });
+  }
+);
+
+app.get(
+  "/db-check",
+  async (
+    req,
+    res
+  ) => {
+    try {
+      await pool.query(
+        "SELECT NOW()"
+      );
+
+      res.json({
+        status:
+          "Database connected"
+      });
+
+    } catch {
+      res.status(500).json({
+        status:
+          "Database failed"
+      });
+    }
+  }
+);
+
+/* ==========================================
    404
-========================= */
-app.use((req, res) => {
-  res.status(404).json({
-    message:
-      "Route not found"
-  });
-});
-
-/* =========================
-   ERROR
-========================= */
+========================================== */
 app.use(
-  (err, req, res, next) => {
-    console.error(err);
+  (req, res) => {
+    res.status(404).json({
+      message:
+        "Route not found"
+    });
+  }
+);
+
+/* ==========================================
+   ERROR HANDLER
+========================================== */
+app.use(
+  (
+    err,
+    req,
+    res,
+    next
+  ) => {
+    console.error(
+      err
+    );
 
     res.status(500).json({
       message:
@@ -195,14 +327,18 @@ app.use(
   }
 );
 
-/* =========================
-   START
-========================= */
+/* ==========================================
+   START SERVER
+========================================== */
 const PORT =
-  process.env.PORT || 5000;
+  process.env.PORT ||
+  5000;
 
-app.listen(PORT, () => {
-  console.log(
-    `SkillEarn running on ${PORT}`
-  );
-});
+app.listen(
+  PORT,
+  () => {
+    console.log(
+      `SkillEarn running on ${PORT}`
+    );
+  }
+);
