@@ -1,6 +1,6 @@
 // users.js
-// UPDATED DEBUG VERSION
-// Shows real SQL errors for registration/login
+// FINAL FIXED VERSION
+// Uses password_hash column
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -89,7 +89,7 @@ router.post(
           name,
           email,
           phone,
-          password,
+          password_hash,
           role,
           balance,
           status
@@ -157,7 +157,7 @@ router.post(
       const valid =
         await bcrypt.compare(
           password,
-          user.password
+          user.password_hash
         );
 
       if (!valid) {
