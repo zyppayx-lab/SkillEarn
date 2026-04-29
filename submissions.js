@@ -1,9 +1,12 @@
 // submissions.js
-// FINAL PRODUCTION VERSION
-// Multi-type task submissions for SkillEarn
+// FINAL VENDOR-CONTROLLED VERSION
+// Vendors approve/reject their own task submissions
+// Admin can view all + override
+// Auto wallet credit from task reward
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
 
 const router = express.Router();
 
@@ -32,14 +35,23 @@ function auth(req, res, next) {
   }
 }
 
-function adminOnly(
+/* ==========================================
+   ROLE CHECKS
+========================================== */
+function vendorOnly(
   req,
   res,
   next
 ) {
-  if (req.user.role !== "admin") {
+  if (
+    req.user.role !==
+      "vendor" &&
+    req.user.role !==
+      "admin"
+  ) {
     return res.status(403).json({
-      message: "Admin only"
+      message:
+        "Vendor only"
     });
   }
 
@@ -47,27 +59,51 @@ function adminOnly(
 }
 
 /* ==========================================
-   SUBMISSION METHODS
+   UPLOADS
 ========================================== */
-/*
-1. screenshot_url
-2. text_answer
-3. profile_link
-4. post_link
-5. referral_username
-6. file_url
-7. email_proof
-8. wallet_address
-9. comment_text
-10. custom_json
-*/
+const storage =
+  multer.diskStorage({
+    destination:
+      function (
+        req,
+        file,
+        cb
+      ) {
+        cb(
+          null,
+          "uploads/"
+        );
+      },
+
+    filename:
+      function (
+        req,
+        file,
+        cb
+      ) {
+        cb(
+          null,
+          Date.now() +
+            "-" +
+            file.originalname
+        );
+      }
+  });
+
+const upload =
+  multer({
+    storage
+  });
 
 /* ==========================================
-   CREATE SUBMISSION
+   USER CREATE SUBMISSION
 ========================================== */
 router.post(
   "/api/submissions/create",
   auth,
+  upload.single(
+    "screenshot"
+  ),
   async (req, res) => {
     try {
       const pool =
@@ -76,71 +112,29 @@ router.post(
       const {
         task_id,
         task_type,
-        method,
-        proof
+        proof_text,
+        proof_link,
+        username
       } = req.body;
 
-      if (
-        !task_id ||
-        !task_type ||
-        !method ||
-        !proof
-      ) {
-        return res.status(400).json({
-          message:
-            "Missing required fields"
+      const screenshot =
+        req.file
+          ? req.file.path
+          : null;
+
+      const proof =
+        JSON.stringify({
+          proof_text:
+            proof_text ||
+            "",
+          proof_link:
+            proof_link ||
+            "",
+          username:
+            username ||
+            "",
+          screenshot
         });
-      }
-
-      const allowed =
-        [
-          "screenshot_url",
-          "text_answer",
-          "profile_link",
-          "post_link",
-          "referral_username",
-          "file_url",
-          "email_proof",
-          "wallet_address",
-          "comment_text",
-          "custom_json"
-        ];
-
-      if (
-        !allowed.includes(
-          method
-        )
-      ) {
-        return res.status(400).json({
-          message:
-            "Invalid submission method"
-        });
-      }
-
-      const check =
-        await pool.query(
-          `
-          SELECT id
-          FROM submissions
-          WHERE user_id=$1
-          AND task_id=$2
-          AND task_type=$3
-          `,
-          [
-            req.user.id,
-            task_id,
-            task_type
-          ]
-        );
-
-      if (
-        check.rows.length > 0
-      ) {
-        return res.status(400).json({
-          message:
-            "Already submitted"
-        });
-      }
 
       await pool.query(
         `
@@ -159,16 +153,13 @@ router.post(
           req.user.id,
           task_id,
           task_type,
-          JSON.stringify({
-            method,
-            value: proof
-          })
+          proof
         ]
       );
 
       res.json({
         message:
-          "Submission received"
+          "Submission sent"
       });
 
     } catch (error) {
@@ -181,7 +172,7 @@ router.post(
 );
 
 /* ==========================================
-   USER SUBMISSIONS
+   USER MY SUBMISSIONS
 ========================================== */
 router.get(
   "/api/submissions/my",
@@ -216,12 +207,12 @@ router.get(
 );
 
 /* ==========================================
-   ADMIN VIEW ALL PENDING
+   VENDOR VIEW OWN SUBMISSIONS
 ========================================== */
 router.get(
-  "/api/admin/submissions",
+  "/api/business/submissions",
   auth,
-  adminOnly,
+  vendorOnly,
   async (req, res) => {
     try {
       const pool =
@@ -230,11 +221,14 @@ router.get(
       const result =
         await pool.query(
           `
-          SELECT *
-          FROM submissions
-          WHERE status='PENDING'
-          ORDER BY id ASC
-          `
+          SELECT s.*
+          FROM submissions s
+          JOIN tasks t
+          ON s.task_id=t.id
+          WHERE t.vendor_id=$1
+          ORDER BY s.id DESC
+          `,
+          [req.user.id]
         );
 
       res.json(
@@ -251,34 +245,41 @@ router.get(
 );
 
 /* ==========================================
-   APPROVE SUBMISSION
+   VENDOR APPROVE SUBMISSION
 ========================================== */
 router.post(
-  "/api/admin/submissions/approve",
+  "/api/business/submissions/approve",
   auth,
-  adminOnly,
+  vendorOnly,
   async (req, res) => {
     try {
       const pool =
         req.app.locals.pool;
 
       const {
-        submission_id,
-        reward
+        submission_id
       } = req.body;
 
-      const find =
+      const check =
         await pool.query(
           `
-          SELECT *
-          FROM submissions
-          WHERE id=$1
+          SELECT
+          s.id,
+          s.user_id,
+          s.status,
+          t.reward,
+          t.vendor_id
+          FROM submissions s
+          JOIN tasks t
+          ON s.task_id=t.id
+          WHERE s.id=$1
           `,
           [submission_id]
         );
 
       if (
-        find.rows.length === 0
+        check.rows.length ===
+        0
       ) {
         return res.status(404).json({
           message:
@@ -287,15 +288,27 @@ router.post(
       }
 
       const row =
-        find.rows[0];
+        check.rows[0];
 
       if (
-        row.status !==
-        "PENDING"
+        req.user.role !==
+          "admin" &&
+        row.vendor_id !==
+          req.user.id
       ) {
-        return res.status(400).json({
+        return res.status(403).json({
           message:
-            "Already processed"
+            "Not your task"
+        });
+      }
+
+      if (
+        row.status ===
+        "APPROVED"
+      ) {
+        return res.json({
+          message:
+            "Already approved"
         });
       }
 
@@ -316,7 +329,7 @@ router.post(
         WHERE id=$2
         `,
         [
-          reward,
+          row.reward,
           row.user_id
         ]
       );
@@ -336,27 +349,8 @@ router.post(
         `,
         [
           row.user_id,
-          reward,
+          row.reward,
           "Task approved"
-        ]
-      );
-
-      await pool.query(
-        `
-        INSERT INTO notifications
-        (
-          user_id,
-          title,
-          message
-        )
-        VALUES
-        ($1,$2,$3)
-        `,
-        [
-          row.user_id,
-          "Submission Approved",
-          "You earned ₦" +
-            reward
         ]
       );
 
@@ -375,34 +369,38 @@ router.post(
 );
 
 /* ==========================================
-   REJECT SUBMISSION
+   VENDOR REJECT SUBMISSION
 ========================================== */
 router.post(
-  "/api/admin/submissions/reject",
+  "/api/business/submissions/reject",
   auth,
-  adminOnly,
+  vendorOnly,
   async (req, res) => {
     try {
       const pool =
         req.app.locals.pool;
 
       const {
-        submission_id,
-        reason
+        submission_id
       } = req.body;
 
-      const find =
+      const check =
         await pool.query(
           `
-          SELECT *
-          FROM submissions
-          WHERE id=$1
+          SELECT
+          s.id,
+          t.vendor_id
+          FROM submissions s
+          JOIN tasks t
+          ON s.task_id=t.id
+          WHERE s.id=$1
           `,
           [submission_id]
         );
 
       if (
-        find.rows.length === 0
+        check.rows.length ===
+        0
       ) {
         return res.status(404).json({
           message:
@@ -411,7 +409,19 @@ router.post(
       }
 
       const row =
-        find.rows[0];
+        check.rows[0];
+
+      if (
+        req.user.role !==
+          "admin" &&
+        row.vendor_id !==
+          req.user.id
+      ) {
+        return res.status(403).json({
+          message:
+            "Not your task"
+        });
+      }
 
       await pool.query(
         `
@@ -422,29 +432,53 @@ router.post(
         [submission_id]
       );
 
-      await pool.query(
-        `
-        INSERT INTO notifications
-        (
-          user_id,
-          title,
-          message
-        )
-        VALUES
-        ($1,$2,$3)
-        `,
-        [
-          row.user_id,
-          "Submission Rejected",
-          reason ||
-            "Your proof was rejected"
-        ]
-      );
-
       res.json({
         message:
-          "Rejected successfully"
+          "Rejected"
       });
+
+    } catch (error) {
+      res.status(500).json({
+        message:
+          error.message
+      });
+    }
+  }
+);
+
+/* ==========================================
+   ADMIN VIEW ALL
+========================================== */
+router.get(
+  "/api/admin/submissions",
+  auth,
+  async (req, res) => {
+    if (
+      req.user.role !==
+      "admin"
+    ) {
+      return res.status(403).json({
+        message:
+          "Admins only"
+      });
+    }
+
+    try {
+      const pool =
+        req.app.locals.pool;
+
+      const result =
+        await pool.query(
+          `
+          SELECT *
+          FROM submissions
+          ORDER BY id DESC
+          `
+        );
+
+      res.json(
+        result.rows
+      );
 
     } catch (error) {
       res.status(500).json({
