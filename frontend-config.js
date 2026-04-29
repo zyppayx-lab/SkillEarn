@@ -1,46 +1,57 @@
 // frontend-config.js
 // FINAL PRODUCTION VERSION
-// Connect all HTML pages to SkillEarn backend
+// SkillEarn Frontend API Connector
 
 const BASE_URL =
 "https://skillearn.onrender.com";
 
 /* ==========================================
-   HELPERS
+   TOKEN HELPERS
 ========================================== */
-function getToken() {
-  return localStorage.getItem(
-    "token"
-  );
-}
-
-function saveToken(token) {
+function setToken(token) {
   localStorage.setItem(
     "token",
     token
   );
 }
 
-function logout() {
+function getToken() {
+  return localStorage.getItem(
+    "token"
+  );
+}
+
+function removeToken() {
   localStorage.removeItem(
     "token"
   );
+}
+
+function logout() {
+  removeToken();
   location.href =
     "login.html";
 }
 
-async function api(
+/* ==========================================
+   UNIVERSAL API REQUEST
+========================================== */
+async function request(
   endpoint,
   method = "GET",
   body = null,
-  auth = false
+  useAuth = false
 ) {
-  const headers = {
-    "Content-Type":
-      "application/json"
-  };
+  const headers = {};
 
-  if (auth) {
+  if (!(body instanceof FormData)) {
+    headers[
+      "Content-Type"
+    ] =
+      "application/json";
+  }
+
+  if (useAuth) {
     headers.Authorization =
       "Bearer " +
       getToken();
@@ -51,15 +62,31 @@ async function api(
     {
       method,
       headers,
-      body: body
-        ? JSON.stringify(
-            body
-          )
-        : null
+      body:
+        body instanceof FormData
+          ? body
+          : body
+          ? JSON.stringify(
+              body
+            )
+          : null
     }
   );
 
   return await res.json();
+}
+
+/* ==========================================
+   AUTO AUTH CHECK
+========================================== */
+function requireLogin() {
+  const token =
+    getToken();
+
+  if (!token) {
+    location.href =
+      "login.html";
+  }
 }
 
 /* ==========================================
@@ -70,7 +97,7 @@ async function userLogin(
   password
 ) {
   const data =
-    await api(
+    await request(
       "/api/auth/login",
       "POST",
       {
@@ -80,7 +107,7 @@ async function userLogin(
     );
 
   if (data.token) {
-    saveToken(
+    setToken(
       data.token
     );
 
@@ -88,7 +115,8 @@ async function userLogin(
       "user-dashboard.html";
   } else {
     alert(
-      data.message
+      data.message ||
+        "Login failed"
     );
   }
 }
@@ -103,7 +131,7 @@ async function userRegister(
   password
 ) {
   const data =
-    await api(
+    await request(
       "/api/auth/register",
       "POST",
       {
@@ -135,7 +163,7 @@ async function businessLogin(
   password
 ) {
   const data =
-    await api(
+    await request(
       "/api/business/login",
       "POST",
       {
@@ -145,7 +173,7 @@ async function businessLogin(
     );
 
   if (data.token) {
-    saveToken(
+    setToken(
       data.token
     );
 
@@ -153,7 +181,8 @@ async function businessLogin(
       "business-dashboard.html";
   } else {
     alert(
-      data.message
+      data.message ||
+        "Login failed"
     );
   }
 }
@@ -166,7 +195,7 @@ async function adminLogin(
   password
 ) {
   const data =
-    await api(
+    await request(
       "/api/admin/login",
       "POST",
       {
@@ -176,7 +205,7 @@ async function adminLogin(
     );
 
   if (data.token) {
-    saveToken(
+    setToken(
       data.token
     );
 
@@ -184,112 +213,77 @@ async function adminLogin(
       "admin-dashboard.html";
   } else {
     alert(
-      data.message
+      data.message ||
+        "Login failed"
     );
   }
 }
 
 /* ==========================================
-   USER DASHBOARD
+   USER APIs
 ========================================== */
-async function loadUserDashboard() {
-  const data =
-    await api(
-      "/api/users/dashboard",
-      "GET",
-      null,
-      true
-    );
-
-  return data;
+async function loadDashboard() {
+  return await request(
+    "/api/users/dashboard",
+    "GET",
+    null,
+    true
+  );
 }
 
-/* ==========================================
-   LOAD TASKS
-========================================== */
-async function loadTasks() {
-  const data =
-    await api(
-      "/api/users/tasks",
-      "GET",
-      null,
-      true
-    );
-
-  return data;
-}
-
-/* ==========================================
-   USER PROFILE
-========================================== */
 async function loadProfile() {
-  const data =
-    await api(
-      "/api/users/profile",
-      "GET",
-      null,
-      true
-    );
-
-  return data;
+  return await request(
+    "/api/users/profile",
+    "GET",
+    null,
+    true
+  );
 }
 
-/* ==========================================
-   USER WALLET
-========================================== */
+async function loadTasks() {
+  return await request(
+    "/api/users/tasks",
+    "GET",
+    null,
+    true
+  );
+}
+
 async function loadWallet() {
-  const data =
-    await api(
-      "/api/users/wallet",
-      "GET",
-      null,
-      true
-    );
-
-  return data;
+  return await request(
+    "/api/users/wallet",
+    "GET",
+    null,
+    true
+  );
 }
 
-/* ==========================================
-   TRANSACTIONS
-========================================== */
 async function loadTransactions() {
-  const data =
-    await api(
-      "/api/users/transactions",
-      "GET",
-      null,
-      true
-    );
-
-  return data;
+  return await request(
+    "/api/users/transactions",
+    "GET",
+    null,
+    true
+  );
 }
 
-/* ==========================================
-   NOTIFICATIONS
-========================================== */
 async function loadNotifications() {
-  const data =
-    await api(
-      "/api/users/notifications",
-      "GET",
-      null,
-      true
-    );
-
-  return data;
+  return await request(
+    "/api/users/notifications",
+    "GET",
+    null,
+    true
+  );
 }
 
-/* ==========================================
-   WITHDRAW
-========================================== */
-async function withdraw(
+async function requestWithdrawal(
   amount,
   bank_name,
   account_name,
   account_number
 ) {
   const data =
-    await api(
+    await request(
       "/api/users/withdraw",
       "POST",
       {
@@ -307,18 +301,17 @@ async function withdraw(
 }
 
 /* ==========================================
-   SUBMIT TASK
+   SUBMISSIONS
 ========================================== */
 async function submitTask(
   task_id,
   task_type,
   proof_text,
   proof_link,
-  username
+  username,
+  fileInputId =
+    "screenshot"
 ) {
-  const token =
-    getToken();
-
   const form =
     new FormData();
 
@@ -345,7 +338,7 @@ async function submitTask(
 
   const file =
     document.getElementById(
-      "screenshot"
+      fileInputId
     )?.files[0];
 
   if (file) {
@@ -355,24 +348,13 @@ async function submitTask(
     );
   }
 
-  const res =
-    await fetch(
-      BASE_URL +
-        "/api/submissions/create",
-      {
-        method:
-          "POST",
-        headers: {
-          Authorization:
-            "Bearer " +
-            token
-        },
-        body: form
-      }
-    );
-
   const data =
-    await res.json();
+    await request(
+      "/api/submissions/create",
+      "POST",
+      form,
+      true
+    );
 
   alert(
     data.message
@@ -380,10 +362,10 @@ async function submitTask(
 }
 
 /* ==========================================
-   BUSINESS DASHBOARD
+   BUSINESS APIs
 ========================================== */
 async function loadBusinessDashboard() {
-  return await api(
+  return await request(
     "/api/business/dashboard",
     "GET",
     null,
@@ -391,14 +373,59 @@ async function loadBusinessDashboard() {
   );
 }
 
+async function loadBusinessJobs() {
+  return await request(
+    "/api/business/jobs",
+    "GET",
+    null,
+    true
+  );
+}
+
+async function loadBusinessSubmissions() {
+  return await request(
+    "/api/business/submissions",
+    "GET",
+    null,
+    true
+  );
+}
+
 /* ==========================================
-   ADMIN DASHBOARD
+   ADMIN APIs
 ========================================== */
 async function loadAdminDashboard() {
-  return await api(
+  return await request(
     "/api/admin/dashboard",
     "GET",
     null,
     true
   );
-         }
+}
+
+async function loadAdminUsers() {
+  return await request(
+    "/api/admin/users",
+    "GET",
+    null,
+    true
+  );
+}
+
+async function loadAdminVendors() {
+  return await request(
+    "/api/admin/vendors",
+    "GET",
+    null,
+    true
+  );
+}
+
+async function loadAdminWithdrawals() {
+  return await request(
+    "/api/admin/withdrawals",
+    "GET",
+    null,
+    true
+  );
+       }
