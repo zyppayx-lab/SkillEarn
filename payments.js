@@ -1,7 +1,8 @@
 // payments.js
 // FINAL PRODUCTION VERSION
-// Creates payment + stores pending records
-// Paystack + Crypto
+// Auto Pricing Engine
+// Supports NGN + Crypto
+// Tasks + Jobs + Global Vendors
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -51,18 +52,84 @@ function businessOnly(
 }
 
 /* ==========================================
-   HELPERS
+   PRICING ENGINE
 ========================================== */
-function getPrefix(purpose) {
-  const map = {
-    task: "TASK_",
-    freelance: "FREE_",
-    hiring: "HIR_",
-    influencer: "INF_",
-    social_task: "SOC_"
+
+function calcPrice(
+  purpose,
+  category,
+  qty
+) {
+  qty =
+    Number(qty) || 1;
+
+  const prices = {
+    task: {
+      signup: 50,
+      install: 80,
+      survey: 100,
+      visit: 30
+    },
+
+    social: {
+      follow: 30,
+      like: 20,
+      comment: 50,
+      join: 35
+    },
+
+    hiring: {
+      "7days": 5000,
+      "14days": 8000,
+      "30days": 15000
+    },
+
+    freelance: {
+      basic: 5000,
+      standard: 10000,
+      premium: 25000
+    },
+
+    influencer: {
+      nano: 10000,
+      micro: 25000,
+      macro: 100000
+    }
   };
 
-  return map[purpose];
+  const unit =
+    prices[purpose]?.[
+      category
+    ];
+
+  if (!unit) return null;
+
+  if (
+    purpose === "hiring" ||
+    purpose === "freelance" ||
+    purpose === "influencer"
+  ) {
+    return unit;
+  }
+
+  return unit * qty;
+}
+
+/* ==========================================
+   HELPERS
+========================================== */
+function getPrefix(
+  purpose
+) {
+  return {
+    task: "TASK_",
+    social: "SOC_",
+    hiring: "HIR_",
+    freelance:
+      "FREE_",
+    influencer:
+      "INF_"
+  }[purpose];
 }
 
 /* ==========================================
@@ -71,7 +138,7 @@ function getPrefix(purpose) {
 async function initPaystack(
   email,
   amount,
-  reference
+  ref
 ) {
   const response =
     await fetch(
@@ -90,7 +157,7 @@ async function initPaystack(
           email,
           amount:
             amount * 100,
-          reference
+          reference: ref
         })
       }
     );
@@ -99,7 +166,7 @@ async function initPaystack(
 }
 
 /* ==========================================
-   CREATE PAYSTACK PAYMENT
+   CREATE NGN PAYMENT
 ========================================== */
 router.post(
   "/api/paystack/create-payment",
@@ -107,73 +174,55 @@ router.post(
   businessOnly,
   async (req, res) => {
     try {
-      const pool =
-        req.app.locals.pool;
-
       const {
         email,
-        amount,
-        title,
-        purpose
+        purpose,
+        category,
+        qty
       } = req.body;
 
-      const prefix =
-        getPrefix(purpose);
+      const amount =
+        calcPrice(
+          purpose,
+          category,
+          qty
+        );
 
-      if (!prefix) {
+      if (!amount) {
         return res.status(400).json({
           message:
-            "Invalid purpose"
+            "Invalid pricing request"
         });
       }
 
-      const reference =
-        prefix + Date.now();
+      const ref =
+        getPrefix(
+          purpose
+        ) +
+        Date.now();
 
-      const pay =
+      const data =
         await initPaystack(
           email,
           amount,
-          reference
+          ref
         );
 
-      await pool.query(
-        `
-        INSERT INTO payments
-        (
-          vendor_id,
-          reference,
-          amount,
-          purpose,
-          title,
-          method,
-          status
-        )
-        VALUES
-        ($1,$2,$3,$4,$5,'paystack','PENDING')
-      `,
-        [
-          req.user.id,
-          reference,
-          amount,
-          purpose,
-          title
-        ]
-      );
-
       res.json({
+        currency:
+          "NGN",
+        amount,
+        reference:
+          ref,
         payment_url:
-          pay.data
-            .authorization_url,
-        reference
+          data.data
+            .authorization_url
       });
 
-    } catch (error) {
-      console.error(error);
-
+    } catch {
       res.status(500).json({
         message:
-          "Unable to create payment"
+          "Payment init failed"
       });
     }
   }
@@ -188,27 +237,35 @@ router.post(
   businessOnly,
   async (req, res) => {
     try {
-      const pool =
-        req.app.locals.pool;
-
       const {
-        amount,
-        pay_currency,
         purpose,
-        title
+        category,
+        qty,
+        pay_currency
       } = req.body;
 
-      const prefix =
-        getPrefix(purpose);
+      const amountNGN =
+        calcPrice(
+          purpose,
+          category,
+          qty
+        );
 
-      if (!prefix) {
+      if (!amountNGN) {
         return res.status(400).json({
           message:
-            "Invalid purpose"
+            "Invalid pricing request"
         });
       }
 
-      const reference =
+      // Approx FX
+      const usd =
+        (
+          amountNGN /
+          1600
+        ).toFixed(2);
+
+      const ref =
         "CRYPTO_" +
         Date.now();
 
@@ -216,7 +273,8 @@ router.post(
         await fetch(
           "https://api.nowpayments.io/v1/payment",
           {
-            method: "POST",
+            method:
+              "POST",
             headers: {
               "x-api-key":
                 process.env
@@ -226,15 +284,18 @@ router.post(
             },
             body: JSON.stringify({
               price_amount:
-                amount,
+                usd,
               price_currency:
                 "usd",
-              pay_currency,
+              pay_currency:
+                pay_currency ||
+                "usdttrc20",
               order_id:
-                reference,
+                ref,
               order_description:
-                title ||
-                purpose
+                purpose +
+                " " +
+                category
             })
           }
         );
@@ -242,43 +303,59 @@ router.post(
       const data =
         await response.json();
 
-      await pool.query(
-        `
-        INSERT INTO payments
-        (
-          vendor_id,
-          reference,
-          amount,
-          purpose,
-          title,
-          method,
-          status
-        )
-        VALUES
-        ($1,$2,$3,$4,$5,'crypto','PENDING')
-      `,
-        [
-          req.user.id,
-          reference,
-          amount,
-          purpose,
-          title
-        ]
-      );
-
       res.json({
-        reference,
+        currency:
+          "USD",
+        usd,
+        ngn:
+          amountNGN,
+        reference:
+          ref,
         ...data
       });
 
-    } catch (error) {
-      console.error(error);
-
+    } catch {
       res.status(500).json({
         message:
           "Crypto payment failed"
       });
     }
+  }
+);
+
+/* ==========================================
+   PRICE CHECKER
+========================================== */
+router.post(
+  "/api/payments/check-price",
+  auth,
+  businessOnly,
+  async (req, res) => {
+    const {
+      purpose,
+      category,
+      qty
+    } = req.body;
+
+    const amount =
+      calcPrice(
+        purpose,
+        category,
+        qty
+      );
+
+    if (!amount) {
+      return res.status(400).json({
+        message:
+          "Invalid request"
+      });
+    }
+
+    res.json({
+      currency:
+        "NGN",
+      amount
+    });
   }
 );
 
