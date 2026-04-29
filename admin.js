@@ -1,9 +1,11 @@
 // admin.js
-// UPDATED PRODUCTION VERSION
-// Real database powered admin panel
+// FINAL PRODUCTION ADMIN PANEL
+// Admin Login + Dashboard + Vendor Approval + Withdrawals + Stats
+// All existing features preserved
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 
 const router = express.Router();
 
@@ -51,6 +53,81 @@ function adminOnly(
   next();
 }
 
+/* ==========================================
+   ADMIN LOGIN
+========================================== */
+router.post(
+  "/api/admin/login",
+  async (req, res) => {
+    try {
+      const pool =
+        req.app.locals.pool;
+
+      const {
+        email,
+        password
+      } = req.body;
+
+      const result =
+        await pool.query(
+          "SELECT * FROM admins WHERE email=$1",
+          [email]
+        );
+
+      if (
+        result.rows.length === 0
+      ) {
+        return res.status(400).json({
+          message:
+            "Invalid login"
+        });
+      }
+
+      const admin =
+        result.rows[0];
+
+      const valid =
+        await bcrypt.compare(
+          password,
+          admin.password
+        );
+
+      if (!valid) {
+        return res.status(400).json({
+          message:
+            "Invalid login"
+        });
+      }
+
+      const token =
+        jwt.sign(
+          {
+            id: admin.id,
+            email:
+              admin.email,
+            role: "admin"
+          },
+          process.env.JWT_SECRET,
+          {
+            expiresIn: "7d"
+          }
+        );
+
+      res.json({
+        message:
+          "Login successful",
+        token
+      });
+
+    } catch {
+      res.status(500).json({
+        message:
+          "Login failed"
+      });
+    }
+  }
+);
+
 /* ==================================================
    ADMIN DASHBOARD
 ================================================== */
@@ -65,26 +142,24 @@ router.get(
     try {
       const users =
         await pool.query(
-          `SELECT COUNT(*) FROM users`
+          "SELECT COUNT(*) FROM users"
         );
 
       const vendors =
         await pool.query(
-          `SELECT COUNT(*) FROM vendors`
+          "SELECT COUNT(*) FROM vendors"
         );
 
       const tasks =
         await pool.query(
-          `SELECT COUNT(*) FROM tasks`
+          "SELECT COUNT(*) FROM tasks"
         );
 
       const withdrawals =
         await pool.query(
-          `
-          SELECT COUNT(*)
-          FROM withdrawals
-          WHERE status='PENDING'
-        `
+          `SELECT COUNT(*)
+           FROM withdrawals
+           WHERE status='PENDING'`
         );
 
       res.json({
@@ -125,12 +200,10 @@ router.post(
     } = req.body;
 
     await pool.query(
-      `
-      UPDATE vendors
-      SET approved=true,
-          status='active'
-      WHERE id=$1
-    `,
+      `UPDATE vendors
+       SET approved=true,
+           status='active'
+       WHERE id=$1`,
       [vendor_id]
     );
 
@@ -157,11 +230,9 @@ router.post(
     } = req.body;
 
     await pool.query(
-      `
-      UPDATE vendors
-      SET status='blocked'
-      WHERE id=$1
-    `,
+      `UPDATE vendors
+       SET status='blocked'
+       WHERE id=$1`,
       [vendor_id]
     );
 
@@ -188,11 +259,9 @@ router.post(
     } = req.body;
 
     await pool.query(
-      `
-      UPDATE tasks
-      SET status='ACTIVE'
-      WHERE id=$1
-    `,
+      `UPDATE tasks
+       SET status='ACTIVE'
+       WHERE id=$1`,
       [task_id]
     );
 
@@ -219,10 +288,8 @@ router.post(
     } = req.body;
 
     await pool.query(
-      `
-      DELETE FROM tasks
-      WHERE id=$1
-    `,
+      `DELETE FROM tasks
+       WHERE id=$1`,
       [task_id]
     );
 
@@ -249,11 +316,9 @@ router.post(
     } = req.body;
 
     await pool.query(
-      `
-      UPDATE withdrawals
-      SET status='SUCCESS'
-      WHERE id=$1
-    `,
+      `UPDATE withdrawals
+       SET status='SUCCESS'
+       WHERE id=$1`,
       [withdrawal_id]
     );
 
@@ -278,26 +343,24 @@ router.get(
     try {
       const users =
         await pool.query(
-          `SELECT COUNT(*) FROM users`
+          "SELECT COUNT(*) FROM users"
         );
 
       const businesses =
         await pool.query(
-          `SELECT COUNT(*) FROM vendors`
+          "SELECT COUNT(*) FROM vendors"
         );
 
       const tasks =
         await pool.query(
-          `SELECT COUNT(*) FROM tasks`
+          "SELECT COUNT(*) FROM tasks"
         );
 
       const earnings =
         await pool.query(
-          `
-          SELECT COALESCE(SUM(amount),0)
-          FROM payments
-          WHERE status='SUCCESS'
-        `
+          `SELECT COALESCE(SUM(amount),0) AS total
+           FROM payments
+           WHERE status='SUCCESS'`
         );
 
       res.json({
@@ -308,8 +371,7 @@ router.get(
         total_tasks:
           tasks.rows[0].count,
         total_earnings:
-          earnings.rows[0]
-            .coalesce
+          earnings.rows[0].total
       });
 
     } catch {
@@ -334,13 +396,11 @@ router.get(
 
     const result =
       await pool.query(
-        `
-        SELECT id,name,email,
-        balance,status,
-        created_at
-        FROM users
-        ORDER BY id DESC
-      `
+        `SELECT id,name,email,
+         balance,status,
+         created_at
+         FROM users
+         ORDER BY id DESC`
       );
 
     res.json(
@@ -362,13 +422,11 @@ router.get(
 
     const result =
       await pool.query(
-        `
-        SELECT id,business_name,
-        email,approved,status,
-        created_at
-        FROM vendors
-        ORDER BY id DESC
-      `
+        `SELECT id,business_name,
+         email,approved,status,
+         created_at
+         FROM vendors
+         ORDER BY id DESC`
       );
 
     res.json(
