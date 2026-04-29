@@ -28,6 +28,41 @@ function auth(req, res, next) {
 }
 
 /* ==========================================
+   FRAUD DETECTION
+========================================== */
+async function checkFraud(pool, userId, ip, amount) {
+  try {
+    const recent = await pool.query(`
+      SELECT COUNT(*) FROM withdrawals
+      WHERE user_id=$1
+      AND created_at > NOW() - INTERVAL '10 minutes'
+    `, [userId]);
+
+    if (Number(recent.rows[0].count) >= 3)
+      return "Too many withdrawals";
+
+    const ipCheck = await pool.query(`
+      SELECT COUNT(DISTINCT ip_address)
+      FROM login_logs
+      WHERE user_id=$1
+      AND created_at > NOW() - INTERVAL '24 hours'
+    `, [userId]);
+
+    if (Number(ipCheck.rows[0].count) >= 5)
+      return "Multiple IP usage detected";
+
+    if (amount > 100000)
+      return "Suspicious large withdrawal";
+
+    return null;
+
+  } catch (e) {
+    console.error("Fraud error:", e);
+    return null;
+  }
+}
+
+/* ==========================================
    SEND OTP
 ========================================== */
 async function sendOTP(email, code) {
@@ -54,13 +89,7 @@ async function sendOTP(email, code) {
 router.post("/api/auth/register", async (req, res) => {
   try {
     const pool = req.app.locals.pool;
-
-    const {
-      name,
-      email,
-      password,
-      country
-    } = req.body;
+    const { name, email, password, country } = req.body;
 
     const exist = await pool.query(
       "SELECT id FROM users WHERE email=$1",
@@ -124,7 +153,7 @@ router.post("/api/auth/verify-email", async (req, res) => {
       WHERE email=$1
     `, [email]);
 
-    res.json({ message: "Verified" });
+    res.json({ message: "Email verified" });
 
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -145,9 +174,7 @@ router.post("/api/auth/login", async (req, res) => {
     );
 
     if (result.rows.length === 0)
-      return res.status(400).json({
-        message: "Invalid login"
-      });
+      return res.status(400).json({ message: "Invalid login" });
 
     const user = result.rows[0];
 
@@ -157,14 +184,21 @@ router.post("/api/auth/login", async (req, res) => {
     );
 
     if (!valid)
-      return res.status(400).json({
-        message: "Invalid login"
-      });
+      return res.status(400).json({ message: "Invalid login" });
 
     if (!user.email_verified)
       return res.status(403).json({
         message: "Verify email first"
       });
+
+    // SAVE IP
+    await pool.query(`
+      INSERT INTO login_logs (user_id, ip_address)
+      VALUES ($1,$2)
+    `, [
+      user.id,
+      req.headers["x-forwarded-for"] || req.socket.remoteAddress
+    ]);
 
     const token = jwt.sign(
       {
@@ -256,7 +290,7 @@ router.get("/api/users/wallet", auth, async (req, res) => {
 });
 
 /* ==========================================
-   WITHDRAW (NGN + CRYPTO)
+   WITHDRAW
 ========================================== */
 router.post("/api/users/withdraw", auth, async (req, res) => {
   try {
@@ -283,20 +317,38 @@ router.post("/api/users/withdraw", auth, async (req, res) => {
         message: "Insufficient balance"
       });
 
+    // FRAUD CHECK
+    const fraud = await checkFraud(
+      pool,
+      req.user.id,
+      req.headers["x-forwarded-for"] || req.socket.remoteAddress,
+      amt
+    );
+
+    if (fraud) {
+      await pool.query(`
+        INSERT INTO fraud_logs (user_id,reason)
+        VALUES ($1,$2)
+      `, [req.user.id, fraud]);
+
+      return res.status(403).json({
+        message: "Blocked",
+        reason: fraud
+      });
+    }
+
     let method = "bank";
 
-    // CRYPTO for NON-NG users
     if (user.country !== "NG") {
       if (amt < 20)
         return res.status(400).json({
-          message: "Minimum crypto withdrawal is $20"
+          message: "Min crypto = $20"
         });
-
       method = "crypto";
     } else {
       if (amt < 1000)
         return res.status(400).json({
-          message: "Minimum withdrawal is ₦1000"
+          message: "Min withdrawal ₦1000"
         });
     }
 
@@ -325,48 +377,10 @@ router.post("/api/users/withdraw", auth, async (req, res) => {
     `, [amt, req.user.id]);
 
     res.json({
-      message: "Withdrawal submitted for approval",
+      message: "Withdrawal submitted",
       fee,
       finalAmount
     });
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
-});
-
-/* ==========================================
-   TRANSACTIONS
-========================================== */
-router.get("/api/users/transactions", auth, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
-
-    const result = await pool.query(
-      `SELECT * FROM transactions WHERE user_id=$1 ORDER BY id DESC`,
-      [req.user.id]
-    );
-
-    res.json(result.rows);
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
-});
-
-/* ==========================================
-   NOTIFICATIONS
-========================================== */
-router.get("/api/users/notifications", auth, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
-
-    const result = await pool.query(
-      `SELECT * FROM notifications WHERE user_id=$1 ORDER BY id DESC`,
-      [req.user.id]
-    );
-
-    res.json(result.rows);
 
   } catch (e) {
     res.status(500).json({ message: e.message });
