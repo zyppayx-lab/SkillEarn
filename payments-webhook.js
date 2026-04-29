@@ -1,44 +1,50 @@
 // payments-webhook.js
-// FULL AUTO VERSION
-// Vendor pays -> webhook confirms -> task goes live automatically
+// FINAL PRODUCTION WEBHOOK SYSTEM
+// Paystack + NOWPayments
+// Auto update DB + activate campaigns
 
 const express = require("express");
 const crypto = require("crypto");
 
 const router = express.Router();
 
-/* ==================================================
+/* ==========================================
+   RAW BODY FOR SIGNATURE CHECK
+========================================== */
+router.use(
+  express.raw({
+    type: "*/*"
+  })
+);
+
+/* ==========================================
    PAYSTACK WEBHOOK
-================================================== */
+========================================== */
 router.post(
   "/api/webhook/paystack",
-  express.raw({
-    type: "application/json"
-  }),
   async (req, res) => {
-    const pool =
-      req.app.locals.pool;
-
     try {
-      const signature =
-        req.headers[
-          "x-paystack-signature"
-        ];
+      const secret =
+        process.env.PAYSTACK_SECRET_KEY;
 
       const hash =
         crypto
           .createHmac(
             "sha512",
-            process.env
-              .PAYSTACK_SECRET_KEY
+            secret
           )
           .update(req.body)
           .digest("hex");
 
+      const signature =
+        req.headers[
+          "x-paystack-signature"
+        ];
+
       if (hash !== signature) {
         return res
           .status(401)
-          .send("Invalid");
+          .send("Invalid signature");
       }
 
       const event =
@@ -50,206 +56,163 @@ router.post(
         event.event ===
         "charge.success"
       ) {
-        const data =
-          event.data;
+        const ref =
+          event.data.reference;
 
-        const reference =
-          data.reference;
+        const amount =
+          event.data.amount /
+          100;
 
-        /* ==================================
-           FIND PAYMENT RECORD
-        ================================== */
-        const payment =
-          await pool.query(
-            `
-            SELECT * FROM payments
-            WHERE payment_reference=$1
-          `,
-            [reference]
-          );
+        const pool =
+          req.app.locals.pool;
 
-        if (
-          payment.rows.length ===
-          0
-        ) {
-          return res.sendStatus(
-            200
-          );
-        }
-
-        const row =
-          payment.rows[0];
-
-        /* ==================================
-           PREVENT DUPLICATE
-        ================================== */
-        if (
-          row.status ===
-          "SUCCESS"
-        ) {
-          return res.sendStatus(
-            200
-          );
-        }
-
-        /* ==================================
-           MARK SUCCESS
-        ================================== */
+        /* save/update payment */
         await pool.query(
           `
-          UPDATE payments
-          SET status='SUCCESS'
-          WHERE payment_reference=$1
+          INSERT INTO payments
+          (reference,amount,status,method)
+          VALUES ($1,$2,'SUCCESS','paystack')
+          ON CONFLICT (reference)
+          DO UPDATE SET
+          status='SUCCESS'
         `,
-          [reference]
+          [ref, amount]
         );
 
-        /* ==================================
-           CREATE TASK AUTOMATICALLY
-        ================================== */
+        /* activate task if TASK_ */
         if (
-          row.purpose ===
-          "task"
+          ref.startsWith(
+            "TASK_"
+          )
         ) {
           await pool.query(
             `
-            INSERT INTO tasks
-            (
-              vendor_id,
-              title,
-              reward,
-              paid,
-              payment_reference,
-              status
-            )
-            VALUES
-            ($1,$2,$3,true,$4,'ACTIVE')
+            UPDATE tasks
+            SET paid=true,
+                status='ACTIVE'
+            WHERE payment_reference=$1
           `,
-            [
-              row.vendor_id,
-              row.task_title,
-              row.amount,
-              reference
-            ]
+            [ref]
           );
         }
 
-        /* ==================================
-           FREELANCE JOB
-        ================================== */
         if (
-          row.purpose ===
-          "freelance"
+          ref.startsWith(
+            "FREE_"
+          )
         ) {
           await pool.query(
             `
-            INSERT INTO freelance_jobs
-            (
-              vendor_id,
-              title,
-              budget,
-              paid,
-              payment_reference,
-              status
-            )
-            VALUES
-            ($1,$2,$3,true,$4,'ACTIVE')
+            UPDATE freelance_jobs
+            SET paid=true,
+                status='ACTIVE'
+            WHERE payment_reference=$1
           `,
-            [
-              row.vendor_id,
-              row.task_title,
-              row.amount,
-              reference
-            ]
+            [ref]
           );
         }
 
-        /* ==================================
-           HIRING JOB
-        ================================== */
         if (
-          row.purpose ===
-          "hiring"
+          ref.startsWith(
+            "HIR_"
+          )
         ) {
           await pool.query(
             `
-            INSERT INTO hiring_jobs
-            (
-              vendor_id,
-              title,
-              salary,
-              paid,
-              payment_reference,
-              status
-            )
-            VALUES
-            ($1,$2,$3,true,$4,'ACTIVE')
+            UPDATE hiring_jobs
+            SET paid=true,
+                status='ACTIVE'
+            WHERE payment_reference=$1
           `,
-            [
-              row.vendor_id,
-              row.task_title,
-              row.amount,
-              reference
-            ]
+            [ref]
           );
         }
 
-        /* ==================================
-           INFLUENCER JOB
-        ================================== */
         if (
-          row.purpose ===
-          "influencer"
+          ref.startsWith(
+            "INF_"
+          )
         ) {
           await pool.query(
             `
-            INSERT INTO influencer_jobs
-            (
-              vendor_id,
-              title,
-              budget,
-              paid,
-              payment_reference,
-              status
-            )
-            VALUES
-            ($1,$2,$3,true,$4,'ACTIVE')
+            UPDATE influencer_jobs
+            SET paid=true,
+                status='ACTIVE'
+            WHERE payment_reference=$1
           `,
-            [
-              row.vendor_id,
-              row.task_title,
-              row.amount,
-              reference
-            ]
+            [ref]
           );
         }
       }
 
-      res.sendStatus(200);
+      res.send("ok");
 
     } catch (error) {
       console.error(error);
-      res.sendStatus(500);
+      res
+        .status(500)
+        .send("Webhook failed");
     }
   }
 );
 
-/* ==================================================
-   CRYPTO WEBHOOK
-================================================== */
+/* ==========================================
+   NOWPAYMENTS WEBHOOK
+========================================== */
 router.post(
   "/api/webhook/crypto",
   express.json(),
   async (req, res) => {
     try {
-      // Same logic as paystack
-      // mark success
-      // create task/job
+      const data =
+        req.body;
 
-      res.sendStatus(200);
+      const ref =
+        data.order_id;
 
-    } catch {
-      res.sendStatus(500);
+      const status =
+        data.payment_status;
+
+      if (
+        status !== "finished" &&
+        status !== "confirmed"
+      ) {
+        return res.send("ignored");
+      }
+
+      const amount =
+        data.price_amount;
+
+      const pool =
+        req.app.locals.pool;
+
+      await pool.query(
+        `
+        INSERT INTO payments
+        (reference,amount,status,method)
+        VALUES ($1,$2,'SUCCESS','crypto')
+        ON CONFLICT (reference)
+        DO UPDATE SET
+        status='SUCCESS'
+      `,
+        [ref, amount]
+      );
+
+      if (
+        ref.startsWith(
+          "CRYPTO_"
+        )
+      ) {
+        /* optional task activation here */
+      }
+
+      res.send("ok");
+
+    } catch (error) {
+      console.error(error);
+      res
+        .status(500)
+        .send("Webhook failed");
     }
   }
 );
