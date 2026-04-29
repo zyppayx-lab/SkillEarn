@@ -1,8 +1,9 @@
 // payments-webhook.js
-// FINAL AUTOMATED VERSION
+// FINAL PRODUCTION VERSION
 // Paystack + Crypto Webhooks
-// Auto Create Tasks / Jobs
-// Includes Small Escrow Hold
+// Duplicate-safe + Signature-safe + Auto Job Creation
+// Business has NO wallet
+// Escrow stored in payments table only
 
 const express = require("express");
 const crypto = require("crypto");
@@ -10,19 +11,22 @@ const crypto = require("crypto");
 const router = express.Router();
 
 /* ==========================================
-   RAW BODY FOR PAYSTACK
+   PAYSTACK WEBHOOK
 ========================================== */
 router.post(
   "/api/webhook/paystack",
   express.raw({
-    type:
-      "application/json"
+    type: "application/json"
   }),
   async (req, res) => {
     try {
       const secret =
-        process.env
-          .PAYSTACK_SECRET_KEY;
+        process.env.PAYSTACK_SECRET_KEY;
+
+      const signature =
+        req.headers[
+          "x-paystack-signature"
+        ];
 
       const hash =
         crypto
@@ -34,10 +38,7 @@ router.post(
           .digest("hex");
 
       if (
-        hash !==
-        req.headers[
-          "x-paystack-signature"
-        ]
+        hash !== signature
       ) {
         return res
           .status(401)
@@ -46,8 +47,7 @@ router.post(
 
       const event =
         JSON.parse(
-          req.body
-            .toString()
+          req.body.toString()
         );
 
       if (
@@ -63,45 +63,60 @@ router.post(
       const data =
         event.data;
 
-      const ref =
+      const reference =
         data.reference;
 
       const amount =
-        data.amount /
-        100;
+        Number(
+          data.amount
+        ) / 100;
 
-      // Prevent duplicates
-      const check =
+      /* DUPLICATE CHECK */
+      const exists =
         await pool.query(
           `
           SELECT id
           FROM payments
           WHERE reference=$1
           `,
-          [ref]
+          [reference]
         );
 
       if (
-        check.rows.length >
+        exists.rows.length >
         0
       ) {
         return res.end();
       }
 
       const meta =
-        data.metadata ||
-        {};
+        data.metadata || {};
 
-      const {
-        vendor_id,
-        purpose,
-        category,
-        qty,
-        title,
-        description
-      } = meta;
+      const vendorId =
+        Number(
+          meta.vendor_id
+        );
 
-      // Escrow 10%
+      const purpose =
+        meta.purpose;
+
+      const category =
+        meta.category ||
+        "";
+
+      const qty =
+        Number(
+          meta.qty || 1
+        );
+
+      const title =
+        meta.title ||
+        "Campaign";
+
+      const description =
+        meta.description ||
+        "";
+
       const escrow =
         amount * 0.10;
 
@@ -114,19 +129,23 @@ router.post(
         (
           vendor_id,
           amount,
+          escrow_amount,
+          released_amount,
           method,
           purpose,
           reference,
           status
         )
         VALUES
-        ($1,$2,'paystack',$3,$4,'SUCCESS')
+        ($1,$2,$3,$4,'paystack',$5,$6,'SUCCESS')
         `,
         [
-          vendor_id,
+          vendorId,
           amount,
+          escrow,
+          released,
           purpose,
-          ref
+          reference
         ]
       );
 
@@ -134,38 +153,24 @@ router.post(
         pool,
         purpose,
         {
-          vendor_id,
+          vendor_id:
+            vendorId,
           category,
           qty,
           title,
           description,
-          paid: true,
           payment_ref:
-            ref
+            reference
         }
-      );
-
-      await pool.query(
-        `
-        UPDATE vendors
-        SET wallet =
-        wallet + $1
-        WHERE id=$2
-        `,
-        [
-          escrow,
-          vendor_id
-        ]
       );
 
       return res.end();
 
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.error(
         error
       );
+
       return res
         .status(500)
         .end();
@@ -194,36 +199,52 @@ router.post(
         return res.end();
       }
 
-      const ref =
+      const reference =
         data.order_id;
 
-      const check =
+      const exists =
         await pool.query(
           `
           SELECT id
           FROM payments
           WHERE reference=$1
           `,
-          [ref]
+          [reference]
         );
 
       if (
-        check.rows.length >
+        exists.rows.length >
         0
       ) {
         return res.end();
       }
 
       const meta =
-        data.order_description
-          .split("|");
+        (
+          data.order_description ||
+          ""
+        ).split("|");
 
       const purpose =
-        meta[0];
+        meta[0] ||
+        "task";
+
       const category =
-        meta[1];
-      const vendor_id =
-        meta[2];
+        meta[1] ||
+        "";
+
+      const vendorId =
+        Number(
+          meta[2] || 0
+        );
+
+      const title =
+        meta[3] ||
+        "Crypto Campaign";
+
+      const description =
+        meta[4] ||
+        "Crypto Paid";
 
       const amount =
         Number(
@@ -233,25 +254,32 @@ router.post(
       const escrow =
         amount * 0.10;
 
+      const released =
+        amount - escrow;
+
       await pool.query(
         `
         INSERT INTO payments
         (
           vendor_id,
           amount,
+          escrow_amount,
+          released_amount,
           method,
           purpose,
           reference,
           status
         )
         VALUES
-        ($1,$2,'crypto',$3,$4,'SUCCESS')
+        ($1,$2,$3,$4,'crypto',$5,$6,'SUCCESS')
         `,
         [
-          vendor_id,
+          vendorId,
           amount,
+          escrow,
+          released,
           purpose,
-          ref
+          reference
         ]
       );
 
@@ -259,42 +287,25 @@ router.post(
         pool,
         purpose,
         {
-          vendor_id,
+          vendor_id:
+            vendorId,
           category,
           qty: 1,
-          title:
-            purpose +
-            " Campaign",
-          description:
-            "Crypto paid",
-          paid: true,
+          title,
+          description,
           payment_ref:
-            ref
+            reference
         }
       );
 
-      await pool.query(
-        `
-        UPDATE vendors
-        SET wallet =
-        wallet + $1
-        WHERE id=$2
-        `,
-        [
-          escrow,
-          vendor_id
-        ]
-      );
+      return res.end();
 
-      res.end();
-
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.error(
         error
       );
-      res
+
+      return res
         .status(500)
         .end();
     }
@@ -309,9 +320,9 @@ async function createJob(
   purpose,
   data
 ) {
+  /* TASK */
   if (
-    purpose ===
-    "task"
+    purpose === "task"
   ) {
     await pool.query(
       `
@@ -322,29 +333,29 @@ async function createJob(
         description,
         reward,
         paid,
-        payment_referrence,
+        payment_reference,
         status
       )
       VALUES
-      ($1,$2,$3,50,$4,$5,'ACTIVE')
+      ($1,$2,$3,50,true,$4,'ACTIVE')
       `,
       [
         data.vendor_id,
         data.title,
         data.description,
-        true,
         data.payment_ref
       ]
     );
   }
 
+  /* SOCIAL */
   if (
     purpose ===
     "social"
   ) {
     await pool.query(
       `
-      INSERT INTO social_media_tasks
+      INSERT INTO social_tasks
       (
         vendor_id,
         platform,
@@ -353,7 +364,7 @@ async function createJob(
         description,
         reward,
         paid,
-        payment_referrence,
+        payment_reference,
         status
       )
       VALUES
@@ -369,6 +380,7 @@ async function createJob(
     );
   }
 
+  /* FREELANCE */
   if (
     purpose ===
     "freelance"
@@ -382,7 +394,7 @@ async function createJob(
         description,
         budget,
         paid,
-        payment_referrence,
+        payment_reference,
         status
       )
       VALUES
@@ -397,6 +409,7 @@ async function createJob(
     );
   }
 
+  /* HIRING */
   if (
     purpose ===
     "hiring"
@@ -410,7 +423,7 @@ async function createJob(
         description,
         salary,
         paid,
-        payment_referrence,
+        payment_reference,
         status
       )
       VALUES
@@ -425,6 +438,7 @@ async function createJob(
     );
   }
 
+  /* INFLUENCER */
   if (
     purpose ===
     "influencer"
@@ -438,7 +452,7 @@ async function createJob(
         description,
         budget,
         paid,
-        payment_referrence,
+        payment_reference,
         status
       )
       VALUES
