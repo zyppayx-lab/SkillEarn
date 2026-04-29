@@ -1,7 +1,6 @@
 // admin.js
-// FINAL PRODUCTION ADMIN PANEL
-// Admin Login + Dashboard + Vendor Approval + Withdrawals + Stats
-// All existing features preserved
+// FINAL MASTER ADMIN VERSION
+// Dashboard + approvals + bans + withdrawals + analytics
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -10,429 +9,336 @@ const bcrypt = require("bcryptjs");
 const router = express.Router();
 
 /* ==========================================
-   AUTH
+AUTH
 ========================================== */
-function auth(req, res, next) {
-  const header =
-    req.headers.authorization || "";
+function auth(req,res,next){
+const header=
+req.headers.authorization||"";
 
-  const token =
-    header.replace("Bearer ", "");
+const token=
+header.replace("Bearer ","");
 
-  try {
-    req.user = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
+try{
+req.user=jwt.verify(
+token,
+process.env.JWT_SECRET
+);
 
-    next();
+next();
 
-  } catch {
-    return res.status(401).json({
-      message: "Unauthorized"
-    });
-  }
+}catch{
+return res.status(401).json({
+message:"Unauthorized"
+});
+}
 }
 
-/* ==========================================
-   ADMIN ONLY
-========================================== */
 function adminOnly(
-  req,
-  res,
-  next
-) {
-  if (
-    req.user.role !== "admin"
-  ) {
-    return res.status(403).json({
-      message: "Admin only"
-    });
-  }
-
-  next();
+req,res,next
+){
+if(req.user.role!=="admin"){
+return res.status(403).json({
+message:"Admin only"
+});
+}
+next();
 }
 
 /* ==========================================
-   ADMIN LOGIN
+ADMIN LOGIN
 ========================================== */
 router.post(
-  "/api/admin/login",
-  async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
+"/api/admin/login",
+async(req,res)=>{
+try{
+const pool=req.app.locals.pool;
 
-      const {
-        email,
-        password
-      } = req.body;
+const {
+email,password
+}=req.body;
 
-      const result =
-        await pool.query(
-          "SELECT * FROM admins WHERE email=$1",
-          [email]
-        );
-
-      if (
-        result.rows.length === 0
-      ) {
-        return res.status(400).json({
-          message:
-            "Invalid login"
-        });
-      }
-
-      const admin =
-        result.rows[0];
-
-      const valid =
-        await bcrypt.compare(
-          password,
-          admin.password
-        );
-
-      if (!valid) {
-        return res.status(400).json({
-          message:
-            "Invalid login"
-        });
-      }
-
-      const token =
-        jwt.sign(
-          {
-            id: admin.id,
-            email:
-              admin.email,
-            role: "admin"
-          },
-          process.env.JWT_SECRET,
-          {
-            expiresIn: "7d"
-          }
-        );
-
-      res.json({
-        message:
-          "Login successful",
-        token
-      });
-
-    } catch {
-      res.status(500).json({
-        message:
-          "Login failed"
-      });
-    }
-  }
+const result=
+await pool.query(
+"SELECT * FROM admins WHERE email=$1",
+[email]
 );
 
-/* ==================================================
-   ADMIN DASHBOARD
-================================================== */
+if(result.rows.length===0){
+return res.status(400).json({
+message:"Invalid login"
+});
+}
+
+const admin=result.rows[0];
+
+const valid=
+await bcrypt.compare(
+password,
+admin.password
+);
+
+if(!valid){
+return res.status(400).json({
+message:"Invalid login"
+});
+}
+
+const token=jwt.sign(
+{
+id:admin.id,
+email:admin.email,
+role:"admin"
+},
+process.env.JWT_SECRET,
+{expiresIn:"7d"}
+);
+
+res.json({
+message:"Login successful",
+token
+});
+
+}catch(error){
+res.status(500).json({
+message:error.message
+});
+}
+});
+
+/* ==========================================
+DASHBOARD
+========================================== */
 router.get(
-  "/api/admin/dashboard",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/dashboard",
+auth,
+adminOnly,
+async(req,res)=>{
+try{
+const pool=req.app.locals.pool;
 
-    try {
-      const users =
-        await pool.query(
-          "SELECT COUNT(*) FROM users"
-        );
-
-      const vendors =
-        await pool.query(
-          "SELECT COUNT(*) FROM vendors"
-        );
-
-      const tasks =
-        await pool.query(
-          "SELECT COUNT(*) FROM tasks"
-        );
-
-      const withdrawals =
-        await pool.query(
-          `SELECT COUNT(*)
-           FROM withdrawals
-           WHERE status='PENDING'`
-        );
-
-      res.json({
-        status:
-          "Admin dashboard active",
-        users:
-          users.rows[0].count,
-        vendors:
-          vendors.rows[0].count,
-        tasks:
-          tasks.rows[0].count,
-        withdrawals:
-          withdrawals.rows[0].count
-      });
-
-    } catch {
-      res.status(500).json({
-        message:
-          "Dashboard failed"
-      });
-    }
-  }
+const users=
+await pool.query(
+"SELECT COUNT(*) total FROM users"
 );
 
-/* ==================================================
-   APPROVE BUSINESS
-================================================== */
+const vendors=
+await pool.query(
+"SELECT COUNT(*) total FROM vendors"
+);
+
+const tasks=
+await pool.query(
+"SELECT COUNT(*) total FROM tasks"
+);
+
+const withdrawals=
+await pool.query(
+`SELECT COUNT(*) total
+FROM withdrawals
+WHERE status='PENDING'`
+);
+
+const revenue=
+await pool.query(
+`SELECT COALESCE(
+SUM(amount),0
+) total
+FROM payments
+WHERE status='SUCCESS'`
+);
+
+res.json({
+users:users.rows[0].total,
+vendors:vendors.rows[0].total,
+tasks:tasks.rows[0].total,
+pending_withdrawals:
+withdrawals.rows[0].total,
+revenue:
+revenue.rows[0].total
+});
+
+}catch(error){
+res.status(500).json({
+message:error.message
+});
+}
+});
+
+/* ==========================================
+APPROVE VENDOR
+========================================== */
 router.post(
-  "/api/admin/business/approve",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/vendor/approve",
+auth,
+adminOnly,
+async(req,res)=>{
+const pool=req.app.locals.pool;
 
-    const {
-      vendor_id
-    } = req.body;
-
-    await pool.query(
-      `UPDATE vendors
-       SET approved=true,
-           status='active'
-       WHERE id=$1`,
-      [vendor_id]
-    );
-
-    res.json({
-      message:
-        "Business approved"
-    });
-  }
+await pool.query(
+`UPDATE vendors
+SET approved=true,
+status='active'
+WHERE id=$1`,
+[req.body.vendor_id]
 );
 
-/* ==================================================
-   BLOCK BUSINESS
-================================================== */
+res.json({
+message:"Vendor approved"
+});
+});
+
+/* ==========================================
+BLOCK USER
+========================================== */
 router.post(
-  "/api/admin/business/block",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/user/block",
+auth,
+adminOnly,
+async(req,res)=>{
+const pool=req.app.locals.pool;
 
-    const {
-      vendor_id
-    } = req.body;
-
-    await pool.query(
-      `UPDATE vendors
-       SET status='blocked'
-       WHERE id=$1`,
-      [vendor_id]
-    );
-
-    res.json({
-      message:
-        "Business blocked"
-    });
-  }
+await pool.query(
+`UPDATE users
+SET status='blocked'
+WHERE id=$1`,
+[req.body.user_id]
 );
 
-/* ==================================================
-   APPROVE TASK
-================================================== */
+res.json({
+message:"User blocked"
+});
+});
+
+/* ==========================================
+APPROVE WITHDRAWAL
+========================================== */
 router.post(
-  "/api/admin/task/approve",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/withdraw/approve",
+auth,
+adminOnly,
+async(req,res)=>{
+const pool=req.app.locals.pool;
 
-    const {
-      task_id
-    } = req.body;
-
-    await pool.query(
-      `UPDATE tasks
-       SET status='ACTIVE'
-       WHERE id=$1`,
-      [task_id]
-    );
-
-    res.json({
-      message:
-        "Task approved"
-    });
-  }
+await pool.query(
+`UPDATE withdrawals
+SET status='PAID'
+WHERE id=$1`,
+[req.body.withdrawal_id]
 );
 
-/* ==================================================
-   DELETE TASK
-================================================== */
+res.json({
+message:"Withdrawal approved"
+});
+});
+
+/* ==========================================
+REJECT WITHDRAWAL
+========================================== */
 router.post(
-  "/api/admin/task/delete",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/withdraw/reject",
+auth,
+adminOnly,
+async(req,res)=>{
+const pool=req.app.locals.pool;
 
-    const {
-      task_id
-    } = req.body;
-
-    await pool.query(
-      `DELETE FROM tasks
-       WHERE id=$1`,
-      [task_id]
-    );
-
-    res.json({
-      message:
-        "Task deleted"
-    });
-  }
+const w=
+await pool.query(
+`SELECT *
+FROM withdrawals
+WHERE id=$1`,
+[req.body.withdrawal_id]
 );
 
-/* ==================================================
-   APPROVE WITHDRAWAL
-================================================== */
-router.post(
-  "/api/admin/withdrawal/approve",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+if(w.rows.length===0){
+return res.status(404).json({
+message:"Not found"
+});
+}
 
-    const {
-      withdrawal_id
-    } = req.body;
+const row=w.rows[0];
 
-    await pool.query(
-      `UPDATE withdrawals
-       SET status='SUCCESS'
-       WHERE id=$1`,
-      [withdrawal_id]
-    );
-
-    res.json({
-      message:
-        "Withdrawal approved"
-    });
-  }
+await pool.query(
+`UPDATE withdrawals
+SET status='REJECTED'
+WHERE id=$1`,
+[row.id]
 );
 
-/* ==================================================
-   PLATFORM STATS
-================================================== */
+await pool.query(
+`UPDATE users
+SET balance=balance+$1
+WHERE id=$2`,
+[
+row.amount,
+row.user_id
+]);
+
+res.json({
+message:"Rejected & refunded"
+});
+});
+
+/* ==========================================
+LIST USERS
+========================================== */
 router.get(
-  "/api/admin/stats",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/users",
+auth,
+adminOnly,
+async(req,res)=>{
+const pool=req.app.locals.pool;
 
-    try {
-      const users =
-        await pool.query(
-          "SELECT COUNT(*) FROM users"
-        );
-
-      const businesses =
-        await pool.query(
-          "SELECT COUNT(*) FROM vendors"
-        );
-
-      const tasks =
-        await pool.query(
-          "SELECT COUNT(*) FROM tasks"
-        );
-
-      const earnings =
-        await pool.query(
-          `SELECT COALESCE(SUM(amount),0) AS total
-           FROM payments
-           WHERE status='SUCCESS'`
-        );
-
-      res.json({
-        total_users:
-          users.rows[0].count,
-        total_businesses:
-          businesses.rows[0].count,
-        total_tasks:
-          tasks.rows[0].count,
-        total_earnings:
-          earnings.rows[0].total
-      });
-
-    } catch {
-      res.status(500).json({
-        message:
-          "Stats failed"
-      });
-    }
-  }
+const result=
+await pool.query(
+`SELECT id,name,email,
+balance,status,
+created_at
+FROM users
+ORDER BY id DESC`
 );
 
-/* ==================================================
-   VIEW USERS
-================================================== */
+res.json(result.rows);
+});
+
+/* ==========================================
+LIST VENDORS
+========================================== */
 router.get(
-  "/api/admin/users",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/vendors",
+auth,
+adminOnly,
+async(req,res)=>{
+const pool=req.app.locals.pool;
 
-    const result =
-      await pool.query(
-        `SELECT id,name,email,
-         balance,status,
-         created_at
-         FROM users
-         ORDER BY id DESC`
-      );
-
-    res.json(
-      result.rows
-    );
-  }
+const result=
+await pool.query(
+`SELECT id,business_name,
+email,approved,status
+FROM vendors
+ORDER BY id DESC`
 );
 
-/* ==================================================
-   VIEW BUSINESSES
-================================================== */
+res.json(result.rows);
+});
+
+/* ==========================================
+LIST WITHDRAWALS
+========================================== */
 router.get(
-  "/api/admin/businesses",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    const pool =
-      req.app.locals.pool;
+"/api/admin/withdrawals",
+auth,
+adminOnly,
+async(req,res)=>{
+const pool=req.app.locals.pool;
 
-    const result =
-      await pool.query(
-        `SELECT id,business_name,
-         email,approved,status,
-         created_at
-         FROM vendors
-         ORDER BY id DESC`
-      );
-
-    res.json(
-      result.rows
-    );
-  }
+const result=
+await pool.query(
+`SELECT *
+FROM withdrawals
+ORDER BY id DESC`
 );
+
+res.json(result.rows);
+});
 
 module.exports = router;
