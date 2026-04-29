@@ -1,12 +1,16 @@
 // submissions.js
-// FINAL VENDOR-CONTROLLED VERSION
-// Vendors approve/reject their own task submissions
-// Admin can view all + override
-// Auto wallet credit from task reward
+// FINAL PRODUCTION VERSION
+// Auto reward credit
+// Screenshot upload ready
+// Duplicate protection
+// Slot control
+// Vendor approves own campaigns
+// Admin override enabled
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
+const fs = require("fs");
 
 const router = express.Router();
 
@@ -30,7 +34,8 @@ function auth(req, res, next) {
 
   } catch {
     return res.status(401).json({
-      message: "Unauthorized"
+      message:
+        "Unauthorized"
     });
   }
 }
@@ -59,40 +64,60 @@ function vendorOnly(
 }
 
 /* ==========================================
-   UPLOADS
+   ENSURE UPLOAD DIR
+========================================== */
+if (
+  !fs.existsSync(
+    "uploads"
+  )
+) {
+  fs.mkdirSync(
+    "uploads"
+  );
+}
+
+/* ==========================================
+   MULTER
 ========================================== */
 const storage =
   multer.diskStorage({
     destination:
-      function (
+      (
         req,
         file,
         cb
-      ) {
+      ) =>
         cb(
           null,
           "uploads/"
-        );
-      },
+        ),
 
     filename:
-      function (
+      (
         req,
         file,
         cb
-      ) {
+      ) =>
         cb(
           null,
           Date.now() +
             "-" +
-            file.originalname
-        );
-      }
+            file.originalname.replace(
+              /\s+/g,
+              "-"
+            )
+        )
   });
 
 const upload =
   multer({
-    storage
+    storage,
+    limits: {
+      fileSize:
+        5 *
+        1024 *
+        1024
+    }
   });
 
 /* ==========================================
@@ -104,7 +129,10 @@ router.post(
   upload.single(
     "screenshot"
   ),
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     try {
       const pool =
         req.app.locals.pool;
@@ -116,6 +144,40 @@ router.post(
         proof_link,
         username
       } = req.body;
+
+      if (
+        !task_id
+      ) {
+        return res.status(400).json({
+          message:
+            "task_id required"
+        });
+      }
+
+      // block duplicates
+      const dup =
+        await pool.query(
+          `
+          SELECT id
+          FROM submissions
+          WHERE user_id=$1
+          AND task_id=$2
+          `,
+          [
+            req.user.id,
+            task_id
+          ]
+        );
+
+      if (
+        dup.rows.length >
+        0
+      ) {
+        return res.status(400).json({
+          message:
+            "Already submitted"
+        });
+      }
 
       const screenshot =
         req.file
@@ -152,7 +214,8 @@ router.post(
         [
           req.user.id,
           task_id,
-          task_type,
+          task_type ||
+            "task",
           proof
         ]
       );
@@ -162,7 +225,9 @@ router.post(
           "Submission sent"
       });
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
       res.status(500).json({
         message:
           error.message
@@ -177,7 +242,10 @@ router.post(
 router.get(
   "/api/submissions/my",
   auth,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     try {
       const pool =
         req.app.locals.pool;
@@ -190,14 +258,18 @@ router.get(
           WHERE user_id=$1
           ORDER BY id DESC
           `,
-          [req.user.id]
+          [
+            req.user.id
+          ]
         );
 
       res.json(
         result.rows
       );
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
       res.status(500).json({
         message:
           error.message
@@ -213,7 +285,10 @@ router.get(
   "/api/business/submissions",
   auth,
   vendorOnly,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     try {
       const pool =
         req.app.locals.pool;
@@ -221,21 +296,25 @@ router.get(
       const result =
         await pool.query(
           `
-          SELECT s.*
-          FROM submissions s
-          JOIN tasks t
-          ON s.task_id=t.id
-          WHERE t.vendor_id=$1
-          ORDER BY s.id DESC
+SELECT s.*, t.title
+FROM submissions s
+JOIN tasks t
+ON s.task_id=t.id
+WHERE t.vendor_id=$1
+ORDER BY s.id DESC
           `,
-          [req.user.id]
+          [
+            req.user.id
+          ]
         );
 
       res.json(
         result.rows
       );
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
       res.status(500).json({
         message:
           error.message
@@ -245,40 +324,48 @@ router.get(
 );
 
 /* ==========================================
-   VENDOR APPROVE SUBMISSION
+   APPROVE
 ========================================== */
 router.post(
   "/api/business/submissions/approve",
   auth,
   vendorOnly,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     try {
       const pool =
         req.app.locals.pool;
 
       const {
         submission_id
-      } = req.body;
+      } =
+        req.body;
 
-      const check =
+      const result =
         await pool.query(
           `
-          SELECT
-          s.id,
-          s.user_id,
-          s.status,
-          t.reward,
-          t.vendor_id
-          FROM submissions s
-          JOIN tasks t
-          ON s.task_id=t.id
-          WHERE s.id=$1
+SELECT
+s.id,
+s.user_id,
+s.status,
+t.id AS task_id,
+t.vendor_id,
+t.reward
+FROM submissions s
+JOIN tasks t
+ON s.task_id=t.id
+WHERE s.id=$1
           `,
-          [submission_id]
+          [
+            submission_id
+          ]
         );
 
       if (
-        check.rows.length ===
+        result.rows
+          .length ===
         0
       ) {
         return res.status(404).json({
@@ -288,17 +375,18 @@ router.post(
       }
 
       const row =
-        check.rows[0];
+        result.rows[0];
 
       if (
-        req.user.role !==
+        req.user
+          .role !==
           "admin" &&
         row.vendor_id !==
           req.user.id
       ) {
         return res.status(403).json({
           message:
-            "Not your task"
+            "Not your campaign"
         });
       }
 
@@ -318,7 +406,9 @@ router.post(
         SET status='APPROVED'
         WHERE id=$1
         `,
-        [submission_id]
+        [
+          submission_id
+        ]
       );
 
       await pool.query(
@@ -350,16 +440,18 @@ router.post(
         [
           row.user_id,
           row.reward,
-          "Task approved"
+          "Task approved reward"
         ]
       );
 
       res.json({
         message:
-          "Approved successfully"
+          "Approved & user credited"
       });
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
       res.status(500).json({
         message:
           error.message
@@ -369,37 +461,44 @@ router.post(
 );
 
 /* ==========================================
-   VENDOR REJECT SUBMISSION
+   REJECT
 ========================================== */
 router.post(
   "/api/business/submissions/reject",
   auth,
   vendorOnly,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     try {
       const pool =
         req.app.locals.pool;
 
       const {
         submission_id
-      } = req.body;
+      } =
+        req.body;
 
-      const check =
+      const result =
         await pool.query(
           `
-          SELECT
-          s.id,
-          t.vendor_id
-          FROM submissions s
-          JOIN tasks t
-          ON s.task_id=t.id
-          WHERE s.id=$1
+SELECT
+s.id,
+t.vendor_id
+FROM submissions s
+JOIN tasks t
+ON s.task_id=t.id
+WHERE s.id=$1
           `,
-          [submission_id]
+          [
+            submission_id
+          ]
         );
 
       if (
-        check.rows.length ===
+        result.rows
+          .length ===
         0
       ) {
         return res.status(404).json({
@@ -409,17 +508,18 @@ router.post(
       }
 
       const row =
-        check.rows[0];
+        result.rows[0];
 
       if (
-        req.user.role !==
+        req.user
+          .role !==
           "admin" &&
         row.vendor_id !==
           req.user.id
       ) {
         return res.status(403).json({
           message:
-            "Not your task"
+            "Not your campaign"
         });
       }
 
@@ -429,7 +529,9 @@ router.post(
         SET status='REJECTED'
         WHERE id=$1
         `,
-        [submission_id]
+        [
+          submission_id
+        ]
       );
 
       res.json({
@@ -437,7 +539,9 @@ router.post(
           "Rejected"
       });
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
       res.status(500).json({
         message:
           error.message
@@ -447,14 +551,18 @@ router.post(
 );
 
 /* ==========================================
-   ADMIN VIEW ALL
+   ADMIN ALL
 ========================================== */
 router.get(
   "/api/admin/submissions",
   auth,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     if (
-      req.user.role !==
+      req.user
+        .role !==
       "admin"
     ) {
       return res.status(403).json({
@@ -480,7 +588,9 @@ router.get(
         result.rows
       );
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
       res.status(500).json({
         message:
           error.message
@@ -489,4 +599,5 @@ router.get(
   }
 );
 
-module.exports = router;
+module.exports =
+  router;
