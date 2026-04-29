@@ -1,6 +1,6 @@
 // users.js
-// FINAL FIXED VERSION
-// Uses password_hash column
+// UPDATED VERSION
+// Real tasks route added + auth fixed
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -50,11 +50,7 @@ router.post(
         password
       } = req.body;
 
-      if (
-        !name ||
-        !email ||
-        !password
-      ) {
+      if (!name || !email || !password) {
         return res.status(400).json({
           message:
             "Missing required fields"
@@ -67,9 +63,7 @@ router.post(
           [email]
         );
 
-      if (
-        check.rows.length > 0
-      ) {
+      if (check.rows.length > 0) {
         return res.status(400).json({
           message:
             "Email already registered"
@@ -86,13 +80,9 @@ router.post(
         `
         INSERT INTO users
         (
-          name,
-          email,
-          phone,
+          name,email,phone,
           password_hash,
-          role,
-          balance,
-          status
+          role,balance,status
         )
         VALUES
         ($1,$2,$3,$4,'user',0,'active')
@@ -111,8 +101,6 @@ router.post(
       });
 
     } catch (error) {
-      console.error(error);
-
       res.status(500).json({
         message:
           error.message
@@ -195,8 +183,6 @@ router.post(
       });
 
     } catch (error) {
-      console.error(error);
-
       res.status(500).json({
         message:
           error.message
@@ -206,38 +192,30 @@ router.post(
 );
 
 /* ==========================================
-   USER PROFILE
+   PROFILE
 ========================================== */
 router.get(
   "/api/users/profile",
   auth,
   async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
+    const pool =
+      req.app.locals.pool;
 
-      const result =
-        await pool.query(
-          `
-          SELECT
-          id,name,email,phone,
-          role,balance,status
-          FROM users
-          WHERE id=$1
-          `,
-          [req.user.id]
-        );
-
-      res.json(
-        result.rows[0]
+    const result =
+      await pool.query(
+        `
+        SELECT
+        id,name,email,phone,
+        role,balance,status
+        FROM users
+        WHERE id=$1
+        `,
+        [req.user.id]
       );
 
-    } catch (error) {
-      res.status(500).json({
-        message:
-          error.message
-      });
-    }
+    res.json(
+      result.rows[0]
+    );
   }
 );
 
@@ -248,26 +226,77 @@ router.get(
   "/api/users/wallet",
   auth,
   async (req, res) => {
+    const pool =
+      req.app.locals.pool;
+
+    const result =
+      await pool.query(
+        `
+        SELECT balance
+        FROM users
+        WHERE id=$1
+        `,
+        [req.user.id]
+      );
+
+    res.json({
+      balance:
+        result.rows[0]
+          ?.balance || 0,
+      currency: "NGN"
+    });
+  }
+);
+
+/* ==========================================
+   AVAILABLE TASKS
+========================================== */
+router.get(
+  "/api/users/tasks",
+  auth,
+  async (req, res) => {
     try {
       const pool =
         req.app.locals.pool;
 
-      const result =
+      const tasks =
         await pool.query(
           `
-          SELECT balance
-          FROM users
-          WHERE id=$1
-          `,
-          [req.user.id]
+          SELECT
+          id,title,
+          amount AS reward,
+          status,
+          created_at,
+          'task' AS type
+          FROM tasks
+          WHERE status='ACTIVE'
+          `
         );
 
-      res.json({
-        balance:
-          result.rows[0]
-            ?.balance || 0,
-        currency: "NGN"
-      });
+      const social =
+        await pool.query(
+          `
+          SELECT
+          id,title,
+          amount AS reward,
+          status,
+          created_at,
+          'social' AS type
+          FROM social_media_tasks
+          WHERE status='ACTIVE'
+          `
+        );
+
+      const allTasks = [
+        ...tasks.rows,
+        ...social.rows
+      ].sort(
+        (a, b) =>
+          new Date(b.created_at) -
+          new Date(a.created_at)
+      );
+
+      res.json(allTasks);
 
     } catch (error) {
       res.status(500).json({
@@ -275,17 +304,6 @@ router.get(
           error.message
       });
     }
-  }
-);
-
-/* ==========================================
-   TASKS
-========================================== */
-router.get(
-  "/api/users/tasks",
-  auth,
-  async (req, res) => {
-    res.json([]);
   }
 );
 
@@ -296,31 +314,23 @@ router.get(
   "/api/users/transactions",
   auth,
   async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
+    const pool =
+      req.app.locals.pool;
 
-      const result =
-        await pool.query(
-          `
-          SELECT *
-          FROM transactions
-          WHERE user_id=$1
-          ORDER BY id DESC
-          `,
-          [req.user.id]
-        );
-
-      res.json(
-        result.rows
+    const result =
+      await pool.query(
+        `
+        SELECT *
+        FROM transactions
+        WHERE user_id=$1
+        ORDER BY id DESC
+        `,
+        [req.user.id]
       );
 
-    } catch (error) {
-      res.status(500).json({
-        message:
-          error.message
-      });
-    }
+    res.json(
+      result.rows
+    );
   }
 );
 
@@ -331,31 +341,23 @@ router.get(
   "/api/users/notifications",
   auth,
   async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
+    const pool =
+      req.app.locals.pool;
 
-      const result =
-        await pool.query(
-          `
-          SELECT *
-          FROM notifications
-          WHERE user_id=$1
-          ORDER BY id DESC
-          `,
-          [req.user.id]
-        );
-
-      res.json(
-        result.rows
+    const result =
+      await pool.query(
+        `
+        SELECT *
+        FROM notifications
+        WHERE user_id=$1
+        ORDER BY id DESC
+        `,
+        [req.user.id]
       );
 
-    } catch (error) {
-      res.status(500).json({
-        message:
-          error.message
-      });
-    }
+    res.json(
+      result.rows
+    );
   }
 );
 
