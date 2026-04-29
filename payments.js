@@ -1,7 +1,7 @@
 // payments.js
-// REAL MONEY VERSION UPDATED
+// FINAL PRODUCTION VERSION
+// Creates payment + stores pending records
 // Paystack + Crypto
-// Supports Task, Freelance, Hiring, Influencer
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -25,6 +25,7 @@ function auth(req, res, next) {
     );
 
     next();
+
   } catch {
     return res.status(401).json({
       message: "Unauthorized"
@@ -53,16 +54,20 @@ function businessOnly(
    HELPERS
 ========================================== */
 function getPrefix(purpose) {
-  const prefixes = {
+  const map = {
     task: "TASK_",
     freelance: "FREE_",
     hiring: "HIR_",
-    influencer: "INF_"
+    influencer: "INF_",
+    social_task: "SOC_"
   };
 
-  return prefixes[purpose];
+  return map[purpose];
 }
 
+/* ==========================================
+   PAYSTACK INIT
+========================================== */
 async function initPaystack(
   email,
   amount,
@@ -85,9 +90,7 @@ async function initPaystack(
           email,
           amount:
             amount * 100,
-          reference,
-          callback_url:
-            "https://yourdomain.com/payment-success"
+          reference
         })
       }
     );
@@ -104,6 +107,9 @@ router.post(
   businessOnly,
   async (req, res) => {
     try {
+      const pool =
+        req.app.locals.pool;
+
       const {
         email,
         amount,
@@ -124,74 +130,50 @@ router.post(
       const reference =
         prefix + Date.now();
 
-      const data =
+      const pay =
         await initPaystack(
           email,
           amount,
           reference
         );
 
+      await pool.query(
+        `
+        INSERT INTO payments
+        (
+          vendor_id,
+          reference,
+          amount,
+          purpose,
+          title,
+          method,
+          status
+        )
+        VALUES
+        ($1,$2,$3,$4,$5,'paystack','PENDING')
+      `,
+        [
+          req.user.id,
+          reference,
+          amount,
+          purpose,
+          title
+        ]
+      );
+
       res.json({
         payment_url:
-          data.data
+          pay.data
             .authorization_url,
         reference
       });
-    } catch {
+
+    } catch (error) {
+      console.error(error);
+
       res.status(500).json({
         message:
-          "Unable to initialize payment"
-      });
-    }
-  }
-);
-
-/* ==========================================
-   VERIFY PAYSTACK PAYMENT
-========================================== */
-router.get(
-  "/api/paystack/verify/:ref",
-  auth,
-  businessOnly,
-  async (req, res) => {
-    try {
-      const ref =
-        req.params.ref;
-
-      const response =
-        await fetch(
-          "https://api.paystack.co/transaction/verify/" +
-            ref,
-          {
-            headers: {
-              Authorization:
-                "Bearer " +
-                process.env
-                  .PAYSTACK_SECRET_KEY
-            }
-          }
-        );
-
-      const data =
-        await response.json();
-
-      if (
-        data.data.status ===
-        "success"
-      ) {
-        return res.json({
-          paid: true,
-          reference: ref
-        });
-      }
-
-      res.json({
-        paid: false
-      });
-    } catch {
-      res.status(500).json({
-        message:
-          "Verification failed"
+          "Unable to create payment"
       });
     }
   }
@@ -206,6 +188,9 @@ router.post(
   businessOnly,
   async (req, res) => {
     try {
+      const pool =
+        req.app.locals.pool;
+
       const {
         amount,
         pay_currency,
@@ -257,11 +242,38 @@ router.post(
       const data =
         await response.json();
 
+      await pool.query(
+        `
+        INSERT INTO payments
+        (
+          vendor_id,
+          reference,
+          amount,
+          purpose,
+          title,
+          method,
+          status
+        )
+        VALUES
+        ($1,$2,$3,$4,$5,'crypto','PENDING')
+      `,
+        [
+          req.user.id,
+          reference,
+          amount,
+          purpose,
+          title
+        ]
+      );
+
       res.json({
         reference,
         ...data
       });
-    } catch {
+
+    } catch (error) {
+      console.error(error);
+
       res.status(500).json({
         message:
           "Crypto payment failed"
