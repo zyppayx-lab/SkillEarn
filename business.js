@@ -1,13 +1,19 @@
 // business.js
-// FIXED PRODUCTION VERSION
-// Dashboard safe mode + social media tasks included
+// FINAL PRODUCTION VERSION
+// OTP Email Verification + Admin Approval
+// Dashboard + Payments + Jobs
 // Existing features preserved
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const { Resend } = require("resend");
 
 const router = express.Router();
+
+const resend = new Resend(
+  process.env.RESEND_API_KEY
+);
 
 /* ==========================================
    AUTH
@@ -52,7 +58,29 @@ function businessOnly(
 }
 
 /* ==========================================
-   SAFE SQL HELPERS
+   SEND OTP
+========================================== */
+async function sendOTP(
+  email,
+  code
+) {
+  await resend.emails.send({
+    from:
+      process.env.FROM_EMAIL,
+    to: email,
+    subject:
+      "Verify your Business Account",
+    html: `
+      <h2>SkillEarn Business Verification</h2>
+      <p>Your OTP Code:</p>
+      <h1>${code}</h1>
+      <p>Expires in 10 minutes.</p>
+    `
+  });
+}
+
+/* ==========================================
+   SAFE HELPERS
 ========================================== */
 async function safeCount(
   pool,
@@ -62,9 +90,11 @@ async function safeCount(
   try {
     const result =
       await pool.query(
-        `SELECT COUNT(*) AS total
-         FROM ${table}
-         WHERE vendor_id=$1`,
+        `
+        SELECT COUNT(*) total
+        FROM ${table}
+        WHERE vendor_id=$1
+        `,
         [vendorId]
       );
 
@@ -84,16 +114,20 @@ async function safeSumPayments(
   try {
     const result =
       await pool.query(
-        `SELECT COALESCE(
+        `
+        SELECT COALESCE(
           SUM(amount),0
-        ) AS total
+        ) total
         FROM payments
         WHERE vendor_id=$1
-        AND status='SUCCESS'`,
+        AND status='SUCCESS'
+        `,
         [vendorId]
       );
 
-    return result.rows[0].total;
+    return Number(
+      result.rows[0].total
+    );
 
   } catch {
     return 0;
@@ -113,15 +147,27 @@ router.post(
       const {
         business_name,
         email,
-        phone,
         password
       } = req.body;
 
+      if (
+        !business_name ||
+        !email ||
+        !password
+      ) {
+        return res.status(400).json({
+          message:
+            "Missing required fields"
+        });
+      }
+
       const check =
         await pool.query(
-          `SELECT id
-           FROM vendors
-           WHERE email=$1`,
+          `
+          SELECT id
+          FROM vendors
+          WHERE email=$1
+          `,
           [email]
         );
 
@@ -140,32 +186,175 @@ router.post(
           10
         );
 
+      const otp =
+        Math.floor(
+          100000 +
+          Math.random() *
+          900000
+        ).toString();
+
       await pool.query(
-        `INSERT INTO vendors
+        `
+        INSERT INTO vendors
         (
           business_name,
           email,
-          phone,
-          password
+          password,
+          approved,
+          email_verified,
+          otp_code,
+          otp_expires
         )
-        VALUES ($1,$2,$3,$4)`,
+        VALUES
+        (
+          $1,$2,$3,
+          false,
+          false,
+          $4,
+          NOW() + INTERVAL '10 minutes'
+        )
+        `,
         [
           business_name,
           email,
-          phone || "",
-          hashed
+          hashed,
+          otp
         ]
+      );
+
+      await sendOTP(
+        email,
+        otp
       );
 
       res.json({
         message:
-          "Business registration successful. Await admin approval."
+          "Business registration successful. OTP sent to email."
       });
 
-    } catch {
+    } catch (error) {
       res.status(500).json({
         message:
-          "Registration failed"
+          error.message
+      });
+    }
+  }
+);
+
+/* ==========================================
+   VERIFY EMAIL
+========================================== */
+router.post(
+  "/api/business/verify-email",
+  async (req, res) => {
+    try {
+      const pool =
+        req.app.locals.pool;
+
+      const {
+        email,
+        otp
+      } = req.body;
+
+      const result =
+        await pool.query(
+          `
+          SELECT id
+          FROM vendors
+          WHERE email=$1
+          AND otp_code=$2
+          AND otp_expires > NOW()
+          `,
+          [
+            email,
+            otp
+          ]
+        );
+
+      if (
+        result.rows.length === 0
+      ) {
+        return res.status(400).json({
+          message:
+            "Invalid or expired OTP"
+        });
+      }
+
+      await pool.query(
+        `
+        UPDATE vendors
+        SET
+        email_verified=true,
+        otp_code=NULL,
+        otp_expires=NULL
+        WHERE email=$1
+        `,
+        [email]
+      );
+
+      res.json({
+        message:
+          "Email verified. Await admin approval."
+      });
+
+    } catch (error) {
+      res.status(500).json({
+        message:
+          error.message
+      });
+    }
+  }
+);
+
+/* ==========================================
+   RESEND OTP
+========================================== */
+router.post(
+  "/api/business/resend-otp",
+  async (req, res) => {
+    try {
+      const pool =
+        req.app.locals.pool;
+
+      const { email } =
+        req.body;
+
+      const otp =
+        Math.floor(
+          100000 +
+          Math.random() *
+          900000
+        ).toString();
+
+      await pool.query(
+        `
+        UPDATE vendors
+        SET
+        otp_code=$1,
+        otp_expires=
+        NOW() + INTERVAL '10 minutes'
+        WHERE email=$2
+        `,
+        [
+          otp,
+          email
+        ]
+      );
+
+      await sendOTP(
+        email,
+        otp
+      );
+
+      res.json({
+        message:
+          "OTP resent"
+      });
+
+    } catch (error) {
+      res.status(500).json({
+        message:
+          error.message
       });
     }
   }
@@ -188,9 +377,11 @@ router.post(
 
       const result =
         await pool.query(
-          `SELECT *
-           FROM vendors
-           WHERE email=$1`,
+          `
+          SELECT *
+          FROM vendors
+          WHERE email=$1
+          `,
           [email]
         );
 
@@ -216,6 +407,15 @@ router.post(
         return res.status(400).json({
           message:
             "Invalid login"
+        });
+      }
+
+      if (
+        vendor.email_verified !== true
+      ) {
+        return res.status(403).json({
+          message:
+            "Please verify your email first"
         });
       }
 
@@ -255,18 +455,18 @@ router.post(
         }
       });
 
-    } catch {
+    } catch (error) {
       res.status(500).json({
         message:
-          "Login failed"
+          error.message
       });
     }
   }
 );
 
-/* ==================================================
-   FIXED DASHBOARD
-================================================== */
+/* ==========================================
+   DASHBOARD
+========================================== */
 router.get(
   "/api/business/dashboard",
   auth,
@@ -340,9 +540,9 @@ router.get(
   }
 );
 
-/* ==================================================
+/* ==========================================
    PAYMENT HISTORY
-================================================== */
+========================================== */
 router.get(
   "/api/business/payments",
   auth,
@@ -354,10 +554,12 @@ router.get(
 
       const result =
         await pool.query(
-          `SELECT *
-           FROM payments
-           WHERE vendor_id=$1
-           ORDER BY id DESC`,
+          `
+          SELECT *
+          FROM payments
+          WHERE vendor_id=$1
+          ORDER BY id DESC
+          `,
           [req.user.id]
         );
 
@@ -374,9 +576,9 @@ router.get(
   }
 );
 
-/* ==================================================
+/* ==========================================
    ACTIVE JOBS
-================================================== */
+========================================== */
 router.get(
   "/api/business/jobs",
   auth,
@@ -389,38 +591,28 @@ router.get(
       const result =
         await pool.query(
           `
-          SELECT id,title,status,
-          created_at,'task' as type
-          FROM tasks
-          WHERE vendor_id=$1
+          SELECT id,title,status,created_at,'task' type
+          FROM tasks WHERE vendor_id=$1
 
           UNION ALL
 
-          SELECT id,title,status,
-          created_at,'freelance'
-          FROM freelance_jobs
-          WHERE vendor_id=$1
+          SELECT id,title,status,created_at,'freelance'
+          FROM freelance_jobs WHERE vendor_id=$1
 
           UNION ALL
 
-          SELECT id,title,status,
-          created_at,'hiring'
-          FROM hiring_jobs
-          WHERE vendor_id=$1
+          SELECT id,title,status,created_at,'hiring'
+          FROM hiring_jobs WHERE vendor_id=$1
 
           UNION ALL
 
-          SELECT id,title,status,
-          created_at,'influencer'
-          FROM influencer_jobs
-          WHERE vendor_id=$1
+          SELECT id,title,status,created_at,'influencer'
+          FROM influencer_jobs WHERE vendor_id=$1
 
           UNION ALL
 
-          SELECT id,title,status,
-          created_at,'social'
-          FROM social_tasks
-          WHERE vendor_id=$1
+          SELECT id,title,status,created_at,'social'
+          FROM social_tasks WHERE vendor_id=$1
 
           ORDER BY created_at DESC
           `,
