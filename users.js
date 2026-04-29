@@ -1,6 +1,6 @@
 // users.js
 // FINAL PRODUCTION VERSION
-// OTP Verification + Login Protection + Dashboard + Wallet + Tasks + Withdrawals + Notifications
+// OTP Verification + Country Support + Login Protection + Dashboard + Wallet + Withdrawals + Notifications
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -28,9 +28,7 @@ function auth(req, res, next) {
       token,
       process.env.JWT_SECRET
     );
-
     next();
-
   } catch {
     return res.status(401).json({
       message: "Unauthorized"
@@ -44,24 +42,30 @@ function auth(req, res, next) {
 async function sendOTP(email, code) {
   try {
     console.log("Sending OTP to:", email);
-    console.log("FROM_EMAIL:", process.env.FROM_EMAIL);
 
-    const response = await resend.emails.send({
-      from: process.env.FROM_EMAIL,
-      to: email,
-      subject: "Verify your SkillEarn account",
-      html: `
-        <h2>SkillEarn Verification</h2>
-        <p>Your OTP Code:</p>
-        <h1>${code}</h1>
-        <p>This code expires in 10 minutes.</p>
-      `
-    });
+    const response =
+      await resend.emails.send({
+        from: process.env.FROM_EMAIL,
+        to: email,
+        subject: "Verify your SkillEarn account",
+        html: `
+          <h2>SkillEarn Verification</h2>
+          <p>Your OTP Code:</p>
+          <h1>${code}</h1>
+          <p>This code expires in 10 minutes.</p>
+        `
+      });
 
-    console.log("EMAIL RESPONSE:", JSON.stringify(response));
+    console.log(
+      "EMAIL RESPONSE:",
+      JSON.stringify(response)
+    );
 
   } catch (error) {
-    console.error("EMAIL ERROR:", error);
+    console.error(
+      "EMAIL ERROR:",
+      error
+    );
   }
 }
 
@@ -78,7 +82,8 @@ router.post(
       const {
         name,
         email,
-        password
+        password,
+        country
       } = req.body;
 
       if (
@@ -94,11 +99,7 @@ router.post(
 
       const check =
         await pool.query(
-          `
-          SELECT id
-          FROM users
-          WHERE email=$1
-          `,
+          "SELECT id FROM users WHERE email=$1",
           [email]
         );
 
@@ -136,7 +137,8 @@ router.post(
           status,
           email_verified,
           otp_code,
-          otp_expires
+          otp_expires,
+          country
         )
         VALUES
         (
@@ -146,21 +148,20 @@ router.post(
           'active',
           false,
           $4,
-          NOW() + INTERVAL '10 minutes'
+          NOW() + INTERVAL '10 minutes',
+          $5
         )
         `,
         [
           name,
           email,
           hashed,
-          otp
+          otp,
+          country || "NG"
         ]
       );
 
-      await sendOTP(
-        email,
-        otp
-      );
+      await sendOTP(email, otp);
 
       res.json({
         message:
@@ -169,8 +170,7 @@ router.post(
 
     } catch (error) {
       res.status(500).json({
-        message:
-          error.message
+        message: error.message
       });
     }
   }
@@ -186,10 +186,8 @@ router.post(
       const pool =
         req.app.locals.pool;
 
-      const {
-        email,
-        otp
-      } = req.body;
+      const { email, otp } =
+        req.body;
 
       const result =
         await pool.query(
@@ -200,10 +198,7 @@ router.post(
           AND otp_code=$2
           AND otp_expires > NOW()
           `,
-          [
-            email,
-            otp
-          ]
+          [email, otp]
         );
 
       if (
@@ -219,9 +214,9 @@ router.post(
         `
         UPDATE users
         SET
-        email_verified=true,
-        otp_code=NULL,
-        otp_expires=NULL
+          email_verified=true,
+          otp_code=NULL,
+          otp_expires=NULL
         WHERE email=$1
         `,
         [email]
@@ -265,25 +260,18 @@ router.post(
         `
         UPDATE users
         SET
-        otp_code=$1,
-        otp_expires=
-        NOW() + INTERVAL '10 minutes'
+          otp_code=$1,
+          otp_expires=
+          NOW() + INTERVAL '10 minutes'
         WHERE email=$2
         `,
-        [
-          otp,
-          email
-        ]
+        [otp, email]
       );
 
-      await sendOTP(
-        email,
-        otp
-      );
+      await sendOTP(email, otp);
 
       res.json({
-        message:
-          "OTP resent"
+        message: "OTP resent"
       });
 
     } catch (error) {
@@ -312,11 +300,7 @@ router.post(
 
       const result =
         await pool.query(
-          `
-          SELECT *
-          FROM users
-          WHERE email=$1
-          `,
+          "SELECT * FROM users WHERE email=$1",
           [email]
         );
 
@@ -324,8 +308,7 @@ router.post(
         result.rows.length === 0
       ) {
         return res.status(400).json({
-          message:
-            "Invalid login"
+          message: "Invalid login"
         });
       }
 
@@ -340,8 +323,7 @@ router.post(
 
       if (!valid) {
         return res.status(400).json({
-          message:
-            "Invalid login"
+          message: "Invalid login"
         });
       }
 
@@ -359,12 +341,11 @@ router.post(
           {
             id: user.id,
             email: user.email,
-            role: "user"
+            role: "user",
+            country: user.country
           },
           process.env.JWT_SECRET,
-          {
-            expiresIn: "7d"
-          }
+          { expiresIn: "7d" }
         );
 
       res.json({
@@ -374,7 +355,8 @@ router.post(
         user: {
           id: user.id,
           name: user.name,
-          email: user.email
+          email: user.email,
+          country: user.country
         }
       });
 
@@ -440,88 +422,16 @@ router.get(
         );
 
       res.json({
-        profile:
-          profile.rows[0],
-        pending:
-          pending.rows[0].total,
-        approved:
-          approved.rows[0].total,
+        profile: profile.rows[0],
+        pending: pending.rows[0].total,
+        approved: approved.rows[0].total,
         available_tasks:
           tasks.rows[0].total
       });
 
     } catch (error) {
       res.status(500).json({
-        message:
-          error.message
-      });
-    }
-  }
-);
-
-/* ==========================================
-   PROFILE
-========================================== */
-router.get(
-  "/api/users/profile",
-  auth,
-  async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
-
-      const result =
-        await pool.query(
-          `
-          SELECT id,name,email,balance,status
-          FROM users
-          WHERE id=$1
-          `,
-          [req.user.id]
-        );
-
-      res.json(
-        result.rows[0]
-      );
-
-    } catch (error) {
-      res.status(500).json({
-        message:
-          error.message
-      });
-    }
-  }
-);
-
-/* ==========================================
-   TASKS
-========================================== */
-router.get(
-  "/api/users/tasks",
-  auth,
-  async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
-
-      const result =
-        await pool.query(
-          `
-          SELECT id,title,description,reward,status,created_at
-          FROM tasks
-          WHERE status='ACTIVE'
-          ORDER BY id DESC
-          `
-        );
-
-      res.json(
-        result.rows
-      );
-
-    } catch (error) {
-      res.status(500).json({
-        message:
-          error.message
+        message: error.message
       });
     }
   }
@@ -550,16 +460,13 @@ router.get(
 
       res.json({
         balance:
-          result.rows[0]
-            ?.balance || 0,
-        currency:
-          "NGN"
+          result.rows[0]?.balance || 0,
+        currency: "NGN"
       });
 
     } catch (error) {
       res.status(500).json({
-        message:
-          error.message
+        message: error.message
       });
     }
   }
@@ -595,8 +502,7 @@ router.post(
 
       const balance =
         Number(
-          bal.rows[0]
-            .balance || 0
+          bal.rows[0].balance || 0
         );
 
       if (
@@ -648,76 +554,6 @@ router.post(
         message:
           "Withdrawal request sent"
       });
-
-    } catch (error) {
-      res.status(500).json({
-        message:
-          error.message
-      });
-    }
-  }
-);
-
-/* ==========================================
-   TRANSACTIONS
-========================================== */
-router.get(
-  "/api/users/transactions",
-  auth,
-  async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
-
-      const result =
-        await pool.query(
-          `
-          SELECT *
-          FROM transactions
-          WHERE user_id=$1
-          ORDER BY id DESC
-          `,
-          [req.user.id]
-        );
-
-      res.json(
-        result.rows
-      );
-
-    } catch (error) {
-      res.status(500).json({
-        message:
-          error.message
-      });
-    }
-  }
-);
-
-/* ==========================================
-   NOTIFICATIONS
-========================================== */
-router.get(
-  "/api/users/notifications",
-  auth,
-  async (req, res) => {
-    try {
-      const pool =
-        req.app.locals.pool;
-
-      const result =
-        await pool.query(
-          `
-          SELECT *
-          FROM notifications
-          WHERE user_id=$1
-          ORDER BY id DESC
-          `,
-          [req.user.id]
-        );
-
-      res.json(
-        result.rows
-      );
 
     } catch (error) {
       res.status(500).json({
