@@ -1,6 +1,5 @@
 // server.js
-// FINAL STABLE PRODUCTION VERSION
-// Webhook scoped + clean routing + safe middleware order
+// FINAL PRODUCTION VERSION (WEBHOOK FIXED)
 
 require("dotenv").config();
 
@@ -54,19 +53,30 @@ const pool = new Pool({
 app.locals.pool = pool;
 
 /* ==========================================
-   CORE MIDDLEWARE
+   CORS
 ========================================== */
 app.use(cors({
   origin: true,
   credentials: true
 }));
 
+/* ==========================================
+   🚨 WEBHOOK (MUST BE FIRST)
+========================================== */
+app.use("/api/webhook", webhookRoutes);
+
+/* ==========================================
+   BODY PARSERS (AFTER WEBHOOK)
+========================================== */
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({
   extended: true,
   limit: "2mb"
 }));
 
+/* ==========================================
+   SESSION
+========================================== */
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
@@ -110,12 +120,6 @@ app.use("/api/crypto", paymentLimiter);
 app.use("/api/users/withdraw", withdrawLimiter);
 
 /* ==========================================
-   WEBHOOK ROUTES (FIXED ✅)
-   Scoped to prevent route hijacking
-========================================== */
-app.use("/api/webhook", webhookRoutes);
-
-/* ==========================================
    MAIN ROUTES
 ========================================== */
 app.use(paymentRoutes);
@@ -151,7 +155,7 @@ app.get("/db-check", async (req, res) => {
 });
 
 /* ==========================================
-   404 (MUST BE LAST)
+   404 HANDLER
 ========================================== */
 app.use((req, res) => {
   res.status(404).json({
