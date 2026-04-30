@@ -1,6 +1,6 @@
 // server.js
-// FINAL CLEAN PRODUCTION VERSION
-// withdraw.js removed (now handled inside users.js)
+// FINAL STABLE PRODUCTION VERSION
+// Webhook scoped + clean routing + safe middleware order
 
 require("dotenv").config();
 
@@ -80,7 +80,7 @@ app.use(session({
 }));
 
 /* ==========================================
-   SECURITY
+   SECURITY LAYER
 ========================================== */
 applySecurity(app);
 
@@ -106,13 +106,14 @@ app.use("/api/business/verify-email", otpLimiter);
 app.use("/api/paystack", paymentLimiter);
 app.use("/api/crypto", paymentLimiter);
 
-/* WITHDRAW LIMITER (still valid) */
+/* WITHDRAW LIMITER */
 app.use("/api/users/withdraw", withdrawLimiter);
 
 /* ==========================================
-   WEBHOOK ROUTES
+   WEBHOOK ROUTES (FIXED ✅)
+   Scoped to prevent route hijacking
 ========================================== */
-app.use(webhookRoutes);
+app.use("/api/webhook", webhookRoutes);
 
 /* ==========================================
    MAIN ROUTES
@@ -150,7 +151,7 @@ app.get("/db-check", async (req, res) => {
 });
 
 /* ==========================================
-   404
+   404 (MUST BE LAST)
 ========================================== */
 app.use((req, res) => {
   res.status(404).json({
@@ -174,5 +175,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
-  console.log(`SkillEarn running on ${PORT}`);
+  console.log(`🚀 SkillEarn running on port ${PORT}`);
 });
