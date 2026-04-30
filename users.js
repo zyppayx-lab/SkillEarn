@@ -243,20 +243,39 @@ router.get("/api/users/tasks", auth, async (req, res) => {
 });
 
 /* ==========================================
-WALLET
+   WALLET
 ========================================== */
-router.get("/api/users/wallet", auth, async (req, res) => {
-  const pool = req.app.locals.pool;
+router.get(
+  "/api/users/wallet",
+  auth,
+  async (req, res) => {
+    try {
+      const pool = req.app.locals.pool;
 
-  const result = await pool.query(
-    "SELECT balance FROM users WHERE id=$1",
-    [req.user.id]
-  );
+      const result = await pool.query(
+        `
+        SELECT balance
+        FROM users
+        WHERE id=$1
+        `,
+        [req.user.id]
+      );
 
-  res.json({
-    balance: result.rows[0]?.balance || 0
-  });
-});
+      res.json({
+        balance: Number(result.rows[0]?.balance || 0),
+        currency:
+          req.user.country === "NG"
+            ? "NGN"
+            : "USD"
+      });
+
+    } catch (error) {
+      res.status(500).json({
+        message: error.message
+      });
+    }
+  }
+);
 
 /* ==========================================
 WITHDRAW (BANK + CRYPTO)
