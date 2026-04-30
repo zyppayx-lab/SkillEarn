@@ -1,3 +1,7 @@
+// users.js
+// FINAL PRODUCTION VERSION
+// OTP + Country + Crypto Withdrawals + Fees + Admin Approval + Fraud Protection
+
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
@@ -7,63 +11,28 @@ const router = express.Router();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 /* ==========================================
-   AUTH
+AUTH
 ========================================== */
 function auth(req, res, next) {
-  const token =
-    (req.headers.authorization || "")
-      .replace("Bearer ", "");
+  const token = (req.headers.authorization || "").replace("Bearer ", "");
 
   try {
-    req.user = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch {
-    return res.status(401).json({
-      message: "Unauthorized"
-    });
+    return res.status(401).json({ message: "Unauthorized" });
   }
 }
 
 /* ==========================================
-   FRAUD DETECTION
+CONFIG
 ========================================== */
-async function checkFraud(pool, userId, ip, amount) {
-  try {
-    const recent = await pool.query(`
-      SELECT COUNT(*) FROM withdrawals
-      WHERE user_id=$1
-      AND created_at > NOW() - INTERVAL '10 minutes'
-    `, [userId]);
-
-    if (Number(recent.rows[0].count) >= 3)
-      return "Too many withdrawals";
-
-    const ipCheck = await pool.query(`
-      SELECT COUNT(DISTINCT ip_address)
-      FROM login_logs
-      WHERE user_id=$1
-      AND created_at > NOW() - INTERVAL '24 hours'
-    `, [userId]);
-
-    if (Number(ipCheck.rows[0].count) >= 5)
-      return "Multiple IP usage detected";
-
-    if (amount > 100000)
-      return "Suspicious large withdrawal";
-
-    return null;
-
-  } catch (e) {
-    console.error("Fraud error:", e);
-    return null;
-  }
-}
+const NAIRA_MIN = 1000;
+const CRYPTO_MIN = 20;
+const FEE_PERCENT = 1.75;
 
 /* ==========================================
-   SEND OTP
+SEND OTP
 ========================================== */
 async function sendOTP(email, code) {
   try {
@@ -72,53 +41,50 @@ async function sendOTP(email, code) {
       to: email,
       subject: "Verify your SkillEarn account",
       html: `
-        <h2>SkillEarn</h2>
-        <p>Your OTP:</p>
+        <h2>SkillEarn Verification</h2>
         <h1>${code}</h1>
         <p>Expires in 10 minutes</p>
       `
     });
-  } catch (e) {
-    console.error("EMAIL ERROR:", e);
+  } catch (err) {
+    console.error("EMAIL ERROR:", err.message);
   }
 }
 
 /* ==========================================
-   REGISTER
+REGISTER
 ========================================== */
 router.post("/api/auth/register", async (req, res) => {
   try {
     const pool = req.app.locals.pool;
     const { name, email, password, country } = req.body;
 
-    const exist = await pool.query(
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "Missing fields" });
+    }
+
+    const exists = await pool.query(
       "SELECT id FROM users WHERE email=$1",
       [email]
     );
 
-    if (exist.rows.length > 0) {
-      return res.status(400).json({
-        message: "Email already registered"
-      });
+    if (exists.rows.length > 0) {
+      return res.status(400).json({ message: "Email already registered" });
     }
 
-    const hashed = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, 10);
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    const otp = Math.floor(
-      100000 + Math.random() * 900000
-    ).toString();
-
-    await pool.query(`
-      INSERT INTO users
+    await pool.query(
+      `INSERT INTO users
       (name,email,password_hash,role,balance,status,email_verified,otp_code,otp_expires,country)
-      VALUES ($1,$2,$3,'user',0,'active',false,$4,NOW()+INTERVAL '10 minutes',$5)
-    `, [name, email, hashed, otp, country || "NG"]);
+      VALUES($1,$2,$3,'user',0,'active',false,$4,NOW()+INTERVAL '10 minutes',$5)`,
+      [name, email, hash, otp, country || "NG"]
+    );
 
     await sendOTP(email, otp);
 
-    res.json({
-      message: "Registration successful. OTP sent."
-    });
+    res.json({ message: "OTP sent" });
 
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -126,171 +92,130 @@ router.post("/api/auth/register", async (req, res) => {
 });
 
 /* ==========================================
-   VERIFY EMAIL
+VERIFY EMAIL
 ========================================== */
 router.post("/api/auth/verify-email", async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
-    const { email, otp } = req.body;
+  const pool = req.app.locals.pool;
+  const { email, otp } = req.body;
 
-    const result = await pool.query(`
-      SELECT id FROM users
-      WHERE email=$1 AND otp_code=$2
-      AND otp_expires > NOW()
-    `, [email, otp]);
+  const user = await pool.query(
+    `SELECT id FROM users
+     WHERE email=$1 AND otp_code=$2 AND otp_expires > NOW()`,
+    [email, otp]
+  );
 
-    if (result.rows.length === 0) {
-      return res.status(400).json({
-        message: "Invalid or expired OTP"
-      });
-    }
-
-    await pool.query(`
-      UPDATE users
-      SET email_verified=true,
-          otp_code=NULL,
-          otp_expires=NULL
-      WHERE email=$1
-    `, [email]);
-
-    res.json({ message: "Email verified" });
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
+  if (user.rows.length === 0) {
+    return res.status(400).json({ message: "Invalid OTP" });
   }
+
+  await pool.query(
+    `UPDATE users SET email_verified=true, otp_code=NULL WHERE email=$1`,
+    [email]
+  );
+
+  res.json({ message: "Verified" });
 });
 
 /* ==========================================
-   LOGIN
+LOGIN
 ========================================== */
 router.post("/api/auth/login", async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
-    const { email, password } = req.body;
+  const pool = req.app.locals.pool;
+  const { email, password } = req.body;
 
-    const result = await pool.query(
-      "SELECT * FROM users WHERE email=$1",
-      [email]
-    );
+  const result = await pool.query(
+    "SELECT * FROM users WHERE email=$1",
+    [email]
+  );
 
-    if (result.rows.length === 0)
-      return res.status(400).json({ message: "Invalid login" });
-
-    const user = result.rows[0];
-
-    const valid = await bcrypt.compare(
-      password,
-      user.password_hash
-    );
-
-    if (!valid)
-      return res.status(400).json({ message: "Invalid login" });
-
-    if (!user.email_verified)
-      return res.status(403).json({
-        message: "Verify email first"
-      });
-
-    // SAVE IP
-    await pool.query(`
-      INSERT INTO login_logs (user_id, ip_address)
-      VALUES ($1,$2)
-    `, [
-      user.id,
-      req.headers["x-forwarded-for"] || req.socket.remoteAddress
-    ]);
-
-    const token = jwt.sign(
-      {
-        id: user.id,
-        role: "user",
-        country: user.country
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      message: "Login successful",
-      token,
-      user
-    });
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
+  if (result.rows.length === 0) {
+    return res.status(400).json({ message: "Invalid login" });
   }
+
+  const user = result.rows[0];
+
+  const valid = await bcrypt.compare(password, user.password_hash);
+
+  if (!valid) {
+    return res.status(400).json({ message: "Invalid login" });
+  }
+
+  if (!user.email_verified) {
+    return res.status(403).json({ message: "Verify email first" });
+  }
+
+  const token = jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      role: "user",
+      country: user.country
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
+  res.json({
+    message: "Login successful",
+    token,
+    user
+  });
 });
 
 /* ==========================================
-   DASHBOARD
+DASHBOARD
 ========================================== */
 router.get("/api/users/dashboard", auth, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
+  const pool = req.app.locals.pool;
 
-    const profile = await pool.query(
-      `SELECT id,name,email,balance FROM users WHERE id=$1`,
-      [req.user.id]
-    );
+  const profile = await pool.query(
+    "SELECT id,name,email,balance FROM users WHERE id=$1",
+    [req.user.id]
+  );
 
-    const tasks = await pool.query(
-      `SELECT COUNT(*) FROM tasks WHERE status='ACTIVE'`
-    );
+  const tasks = await pool.query(
+    "SELECT COUNT(*) total FROM tasks WHERE status='ACTIVE'"
+  );
 
-    res.json({
-      profile: profile.rows[0],
-      available_tasks: tasks.rows[0].count
-    });
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
+  res.json({
+    profile: profile.rows[0],
+    available_tasks: tasks.rows[0].total
+  });
 });
 
 /* ==========================================
-   TASKS
+TASKS
 ========================================== */
 router.get("/api/users/tasks", auth, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
+  const pool = req.app.locals.pool;
 
-    const result = await pool.query(`
-      SELECT id,title,description,reward,status
-      FROM tasks
-      WHERE status='ACTIVE'
-      ORDER BY id DESC
-    `);
+  const tasks = await pool.query(
+    `SELECT id,title,reward,status
+     FROM tasks WHERE status='ACTIVE'
+     ORDER BY id DESC`
+  );
 
-    res.json(result.rows);
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
+  res.json(tasks.rows);
 });
 
 /* ==========================================
-   WALLET
+WALLET
 ========================================== */
 router.get("/api/users/wallet", auth, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
+  const pool = req.app.locals.pool;
 
-    const result = await pool.query(
-      "SELECT balance FROM users WHERE id=$1",
-      [req.user.id]
-    );
+  const result = await pool.query(
+    "SELECT balance FROM users WHERE id=$1",
+    [req.user.id]
+  );
 
-    res.json({
-      balance: result.rows[0].balance || 0
-    });
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
+  res.json({
+    balance: result.rows[0]?.balance || 0
+  });
 });
 
 /* ==========================================
-   WITHDRAW
+WITHDRAW (BANK + CRYPTO)
 ========================================== */
 router.post("/api/users/withdraw", auth, async (req, res) => {
   try {
@@ -300,7 +225,9 @@ router.post("/api/users/withdraw", auth, async (req, res) => {
       amount,
       bank_name,
       account_number,
-      wallet_address
+      account_name,
+      crypto_address,
+      crypto_network
     } = req.body;
 
     const userRes = await pool.query(
@@ -310,81 +237,101 @@ router.post("/api/users/withdraw", auth, async (req, res) => {
 
     const user = userRes.rows[0];
     const balance = Number(user.balance);
-    const amt = Number(amount);
+    const isNigeria = user.country === "NG";
 
-    if (amt > balance)
+    const min = isNigeria ? NAIRA_MIN : CRYPTO_MIN;
+
+    if (amount < min) {
+      return res.status(400).json({
+        message: `Minimum withdrawal is ${min}`
+      });
+    }
+
+    if (amount > balance) {
       return res.status(400).json({
         message: "Insufficient balance"
       });
+    }
+
+    const fee = (amount * FEE_PERCENT) / 100;
+    const finalAmount = amount - fee;
 
     // FRAUD CHECK
-    const fraud = await checkFraud(
-      pool,
-      req.user.id,
-      req.headers["x-forwarded-for"] || req.socket.remoteAddress,
-      amt
+    const recent = await pool.query(
+      `SELECT COUNT(*) FROM withdrawals
+       WHERE user_id=$1 AND created_at > NOW() - INTERVAL '5 minutes'`,
+      [req.user.id]
     );
 
-    if (fraud) {
-      await pool.query(`
-        INSERT INTO fraud_logs (user_id,reason)
-        VALUES ($1,$2)
-      `, [req.user.id, fraud]);
-
-      return res.status(403).json({
-        message: "Blocked",
-        reason: fraud
+    if (Number(recent.rows[0].count) > 3) {
+      return res.status(429).json({
+        message: "Too many requests. Try later."
       });
     }
 
-    let method = "bank";
+    await pool.query(
+      `INSERT INTO withdrawals
+      (user_id,amount,fee,final_amount,
+       bank_name,account_number,account_name,
+       crypto_address,crypto_network,
+       type,status)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING')`,
+      [
+        req.user.id,
+        amount,
+        fee,
+        finalAmount,
+        bank_name || null,
+        account_number || null,
+        account_name || null,
+        crypto_address || null,
+        crypto_network || null,
+        isNigeria ? "BANK" : "CRYPTO"
+      ]
+    );
 
-    if (user.country !== "NG") {
-      if (amt < 20)
-        return res.status(400).json({
-          message: "Min crypto = $20"
-        });
-      method = "crypto";
-    } else {
-      if (amt < 1000)
-        return res.status(400).json({
-          message: "Min withdrawal ₦1000"
-        });
-    }
-
-    const fee = amt * 0.0175;
-    const finalAmount = amt - fee;
-
-    await pool.query(`
-      INSERT INTO withdrawals
-      (user_id,amount,fee,final_amount,method,bank_name,account_number,wallet_address,status)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PENDING')
-    `, [
-      req.user.id,
-      amt,
-      fee,
-      finalAmount,
-      method,
-      bank_name || null,
-      account_number || null,
-      wallet_address || null
-    ]);
-
-    await pool.query(`
-      UPDATE users
-      SET balance=balance-$1
-      WHERE id=$2
-    `, [amt, req.user.id]);
+    await pool.query(
+      "UPDATE users SET balance=balance-$1 WHERE id=$2",
+      [amount, req.user.id]
+    );
 
     res.json({
-      message: "Withdrawal submitted",
+      message: "Withdrawal submitted for admin approval",
       fee,
-      finalAmount
+      final_amount: finalAmount
     });
 
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
+});
+
+/* ==========================================
+TRANSACTIONS
+========================================== */
+router.get("/api/users/transactions", auth, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const tx = await pool.query(
+    "SELECT * FROM transactions WHERE user_id=$1 ORDER BY id DESC",
+    [req.user.id]
+  );
+
+  res.json(tx.rows);
+});
+
+/* ==========================================
+NOTIFICATIONS
+========================================== */
+router.get("/api/users/notifications", auth, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const data = await pool.query(
+    "SELECT * FROM notifications WHERE user_id=$1 ORDER BY id DESC",
+    [req.user.id]
+  );
+
+  res.json(data.rows);
 });
 
 module.exports = router;
