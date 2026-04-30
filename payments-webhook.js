@@ -1,7 +1,7 @@
 // payments-webhook.js
-// FINAL PRODUCTION VERSION (FIXED)
+// FINAL PRODUCTION VERSION (STABLE)
 // Paystack + Crypto Webhooks
-// Metadata-safe + Duplicate-safe + Escrow-ready
+// Metadata-safe + Duplicate-safe + Logging enabled
 
 const express = require("express");
 const crypto = require("crypto");
@@ -15,6 +15,8 @@ router.post(
   "/api/webhook/paystack",
   express.raw({ type: "application/json" }),
   async (req, res) => {
+    console.log("🔥 PAYSTACK WEBHOOK HIT");
+
     try {
       const secret = process.env.PAYSTACK_SECRET_KEY;
 
@@ -26,7 +28,7 @@ router.post(
         .digest("hex");
 
       if (hash !== signature) {
-        console.log("❌ Invalid Paystack signature");
+        console.log("❌ Invalid signature");
         return res.status(401).end();
       }
 
@@ -37,41 +39,46 @@ router.post(
       }
 
       const pool = req.app.locals.pool;
+
       const data = event.data;
 
       const reference = data.reference;
       const amount = Number(data.amount) / 100;
 
-      /* DUPLICATE CHECK */
+      /* ==========================================
+         DUPLICATE CHECK
+      ========================================== */
       const exists = await pool.query(
-        `SELECT id FROM payments WHERE reference=$1`,
+        "SELECT id FROM payments WHERE reference=$1",
         [reference]
       );
 
       if (exists.rows.length > 0) {
-        console.log("⚠️ Duplicate payment ignored:", reference);
+        console.log("⚠️ Duplicate webhook ignored");
         return res.end();
       }
 
-      /* METADATA SAFE */
+      /* ==========================================
+         METADATA (CRITICAL)
+      ========================================== */
       const meta = data.metadata || {};
 
-      if (!meta.vendor_id) {
-        console.log("❌ Missing vendor_id in metadata");
-        return res.end();
-      }
-
-      const vendorId = Number(meta.vendor_id);
+      const vendorId = Number(meta.vendor_id || 0);
       const purpose = meta.purpose || "task";
       const category = meta.category || "";
       const qty = Number(meta.qty || 1);
       const title = meta.title || "Campaign";
       const description = meta.description || "";
 
-      /* ESCROW SPLIT */
-      const escrow = amount * 0.10;
+      /* ==========================================
+         ESCROW SPLIT
+      ========================================== */
+      const escrow = amount * 0.1;
       const released = amount - escrow;
 
+      /* ==========================================
+         SAVE PAYMENT
+      ========================================== */
       await pool.query(
         `
         INSERT INTO payments
@@ -83,11 +90,10 @@ router.post(
           method,
           purpose,
           reference,
-          currency,
           status
         )
         VALUES
-        ($1,$2,$3,$4,'paystack',$5,$6,'NGN','SUCCESS')
+        ($1,$2,$3,$4,'paystack',$5,$6,'SUCCESS')
         `,
         [
           vendorId,
@@ -99,7 +105,11 @@ router.post(
         ]
       );
 
-      /* AUTO JOB CREATION */
+      console.log("✅ Payment saved:", reference);
+
+      /* ==========================================
+         CREATE JOB / TASK
+      ========================================== */
       await createJob(pool, purpose, {
         vendor_id: vendorId,
         category,
@@ -109,12 +119,12 @@ router.post(
         payment_ref: reference
       });
 
-      console.log("✅ Paystack payment saved:", reference);
+      console.log("✅ Job created for:", reference);
 
       return res.end();
 
     } catch (error) {
-      console.error("❌ Paystack webhook error:", error);
+      console.error("❌ Webhook error:", error);
       return res.status(500).end();
     }
   }
@@ -127,6 +137,8 @@ router.post(
   "/api/webhook/crypto",
   express.json(),
   async (req, res) => {
+    console.log("🔥 CRYPTO WEBHOOK HIT");
+
     try {
       const pool = req.app.locals.pool;
       const data = req.body;
@@ -139,34 +151,29 @@ router.post(
 
       /* DUPLICATE CHECK */
       const exists = await pool.query(
-        `SELECT id FROM payments WHERE reference=$1`,
+        "SELECT id FROM payments WHERE reference=$1",
         [reference]
       );
 
       if (exists.rows.length > 0) {
-        console.log("⚠️ Duplicate crypto ignored:", reference);
         return res.end();
       }
 
-      /* METADATA PARSE */
+      /* META PARSE */
       const meta = (data.order_description || "").split("|");
 
       const purpose = meta[0] || "task";
       const category = meta[1] || "";
       const vendorId = Number(meta[2] || 0);
       const title = meta[3] || "Crypto Campaign";
-      const description = meta[4] || "";
-
-      if (!vendorId) {
-        console.log("❌ Missing vendor_id in crypto metadata");
-        return res.end();
-      }
+      const description = meta[4] || "Crypto Paid";
 
       const amount = Number(data.price_amount) || 0;
 
-      const escrow = amount * 0.10;
+      const escrow = amount * 0.1;
       const released = amount - escrow;
 
+      /* SAVE PAYMENT */
       await pool.query(
         `
         INSERT INTO payments
@@ -178,11 +185,10 @@ router.post(
           method,
           purpose,
           reference,
-          currency,
           status
         )
         VALUES
-        ($1,$2,$3,$4,'crypto',$5,$6,'USD','SUCCESS')
+        ($1,$2,$3,$4,'crypto',$5,$6,'SUCCESS')
         `,
         [
           vendorId,
@@ -194,6 +200,8 @@ router.post(
         ]
       );
 
+      console.log("✅ Crypto payment saved:", reference);
+
       await createJob(pool, purpose, {
         vendor_id: vendorId,
         category,
@@ -202,8 +210,6 @@ router.post(
         description,
         payment_ref: reference
       });
-
-      console.log("✅ Crypto payment saved:", reference);
 
       return res.end();
 
@@ -215,15 +221,25 @@ router.post(
 );
 
 /* ==========================================
-   AUTO JOB CREATION
+   AUTO CREATE JOBS
 ========================================== */
 async function createJob(pool, purpose, data) {
+  /* TASK */
   if (purpose === "task") {
     await pool.query(
       `
       INSERT INTO tasks
-      (vendor_id,title,description,reward,paid,payment_reference,status)
-      VALUES ($1,$2,$3,50,true,$4,'ACTIVE')
+      (
+        vendor_id,
+        title,
+        description,
+        reward,
+        paid,
+        payment_reference,
+        status
+      )
+      VALUES
+      ($1,$2,$3,50,true,$4,'ACTIVE')
       `,
       [
         data.vendor_id,
@@ -234,12 +250,24 @@ async function createJob(pool, purpose, data) {
     );
   }
 
+  /* SOCIAL */
   if (purpose === "social") {
     await pool.query(
       `
       INSERT INTO social_tasks
-      (vendor_id,platform,action,title,description,reward,paid,payment_reference,status)
-      VALUES ($1,'instagram',$2,$3,$4,20,true,$5,'ACTIVE')
+      (
+        vendor_id,
+        platform,
+        action,
+        title,
+        description,
+        reward,
+        paid,
+        payment_reference,
+        status
+      )
+      VALUES
+      ($1,'instagram',$2,$3,$4,20,true,$5,'ACTIVE')
       `,
       [
         data.vendor_id,
@@ -251,12 +279,22 @@ async function createJob(pool, purpose, data) {
     );
   }
 
+  /* FREELANCE */
   if (purpose === "freelance") {
     await pool.query(
       `
       INSERT INTO freelance_jobs
-      (vendor_id,title,description,budget,paid,payment_reference,status)
-      VALUES ($1,$2,$3,5000,true,$4,'ACTIVE')
+      (
+        vendor_id,
+        title,
+        description,
+        budget,
+        paid,
+        payment_reference,
+        status
+      )
+      VALUES
+      ($1,$2,$3,5000,true,$4,'ACTIVE')
       `,
       [
         data.vendor_id,
@@ -267,12 +305,22 @@ async function createJob(pool, purpose, data) {
     );
   }
 
+  /* HIRING */
   if (purpose === "hiring") {
     await pool.query(
       `
       INSERT INTO hiring_jobs
-      (vendor_id,title,description,salary,paid,payment_reference,status)
-      VALUES ($1,$2,$3,'Negotiable',true,$4,'ACTIVE')
+      (
+        vendor_id,
+        title,
+        description,
+        salary,
+        paid,
+        payment_reference,
+        status
+      )
+      VALUES
+      ($1,$2,$3,'Negotiable',true,$4,'ACTIVE')
       `,
       [
         data.vendor_id,
@@ -283,12 +331,22 @@ async function createJob(pool, purpose, data) {
     );
   }
 
+  /* INFLUENCER */
   if (purpose === "influencer") {
     await pool.query(
       `
       INSERT INTO influencer_jobs
-      (vendor_id,title,description,budget,paid,payment_reference,status)
-      VALUES ($1,$2,$3,10000,true,$4,'ACTIVE')
+      (
+        vendor_id,
+        title,
+        description,
+        budget,
+        paid,
+        payment_reference,
+        status
+      )
+      VALUES
+      ($1,$2,$3,10000,true,$4,'ACTIVE')
       `,
       [
         data.vendor_id,
