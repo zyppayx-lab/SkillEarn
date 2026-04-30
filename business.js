@@ -1,7 +1,7 @@
 // business.js
 // FINAL PRODUCTION VERSION
 // Country + Escrow + Task Funding + Auto Payout
-
+console.log("🔥 BUSINESS ROUTES LOADED");
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
