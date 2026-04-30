@@ -1,5 +1,5 @@
 // payments-webhook.js
-// FINAL PRODUCTION VERSION (FULLY FIXED + SAFE)
+// FINAL PRODUCTION VERSION (STABLE + SAFE + NO DB ERRORS)
 
 const express = require("express");
 const crypto = require("crypto");
@@ -116,6 +116,7 @@ router.post(
 
       const reference = data.order_id;
 
+      /* DUPLICATE CHECK */
       const exists = await pool.query(
         "SELECT id FROM payments WHERE reference=$1",
         [reference]
@@ -136,8 +137,12 @@ router.post(
 
       const amount = Number(data.price_amount) || 0;
 
-      /* ✅ ENSURE VENDOR EXISTS */
-      await ensureVendor(pool, vendorId);
+      /* ✅ CHECK VENDOR EXISTS */
+      const vendorExists = await ensureVendor(pool, vendorId);
+      if (!vendorExists) {
+        console.log("❌ Vendor missing, skipping job:", vendorId);
+        return res.end();
+      }
 
       const escrow = amount * 0.1;
       const released = amount - escrow;
@@ -206,8 +211,12 @@ async function processPaystackPayment(data, req) {
   const title = meta.title || "Campaign";
   const description = meta.description || "";
 
-  /* ✅ ENSURE VENDOR EXISTS */
-  await ensureVendor(pool, vendorId);
+  /* ✅ CHECK VENDOR EXISTS */
+  const vendorExists = await ensureVendor(pool, vendorId);
+  if (!vendorExists) {
+    console.log("❌ Vendor missing, skipping job:", vendorId);
+    return;
+  }
 
   const escrow = amount * 0.1;
   const released = amount - escrow;
@@ -243,23 +252,21 @@ async function processPaystackPayment(data, req) {
 }
 
 /* ==========================================
-   ENSURE VENDOR EXISTS (CRITICAL FIX)
+   CHECK VENDOR EXISTS (SAFE)
 ========================================== */
 async function ensureVendor(pool, vendorId) {
-  if (!vendorId) return;
+  if (!vendorId) return false;
 
-  await pool.query(
-    `
-    INSERT INTO vendors (id)
-    VALUES ($1)
-    ON CONFLICT (id) DO NOTHING
-    `,
+  const result = await pool.query(
+    "SELECT id FROM vendors WHERE id=$1",
     [vendorId]
   );
+
+  return result.rows.length > 0;
 }
 
 /* ==========================================
-   CREATE JOBS
+   CREATE JOBS (SAFE)
 ========================================== */
 async function createJob(pool, purpose, data) {
   try {
