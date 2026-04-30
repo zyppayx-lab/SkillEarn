@@ -119,48 +119,92 @@ router.post("/api/auth/verify-email", async (req, res) => {
 /* ==========================================
 LOGIN
 ========================================== */
-router.post("/api/auth/login", async (req, res) => {
-  const pool = req.app.locals.pool;
-  const { email, password } = req.body;
+router.post(
+  "/api/auth/login",
+  async (req, res) => {
+    try {
+      const pool = req.app.locals.pool;
 
-  const result = await pool.query(
-    "SELECT * FROM users WHERE email=$1",
-    [email]
-  );
+      const { email, password } = req.body;
 
-  if (result.rows.length === 0) {
-    return res.status(400).json({ message: "Invalid login" });
+      const result = await pool.query(
+        "SELECT * FROM users WHERE email=$1",
+        [email]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(400).json({
+          message: "Invalid login"
+        });
+      }
+
+      const user = result.rows[0];
+
+      const valid = await bcrypt.compare(
+        password,
+        user.password_hash
+      );
+
+      if (!valid) {
+        return res.status(400).json({
+          message: "Invalid login"
+        });
+      }
+
+      if (user.email_verified !== true) {
+        return res.status(403).json({
+          message:
+            "Please verify your email first"
+        });
+      }
+
+      // OPTIONAL: track device/IP (good for fraud detection)
+      await pool.query(
+        `
+        UPDATE users
+        SET
+          last_ip = $1,
+          last_user_agent = $2
+        WHERE id = $3
+        `,
+        [
+          req.ip,
+          req.headers["user-agent"],
+          user.id
+        ]
+      );
+
+      const token = jwt.sign(
+        {
+          id: user.id,
+          email: user.email,
+          role: "user",
+          country: user.country
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      // ✅ SAFE RESPONSE (NO sensitive data)
+      res.json({
+        message: "Login successful",
+        token,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          balance: user.balance,
+          country: user.country
+        }
+      });
+
+    } catch (error) {
+      res.status(500).json({
+        message: error.message
+      });
+    }
   }
-
-  const user = result.rows[0];
-
-  const valid = await bcrypt.compare(password, user.password_hash);
-
-  if (!valid) {
-    return res.status(400).json({ message: "Invalid login" });
-  }
-
-  if (!user.email_verified) {
-    return res.status(403).json({ message: "Verify email first" });
-  }
-
-  const token = jwt.sign(
-    {
-      id: user.id,
-      email: user.email,
-      role: "user",
-      country: user.country
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-
-  res.json({
-    message: "Login successful",
-    token,
-    user
-  });
-});
+);
 
 /* ==========================================
 DASHBOARD
