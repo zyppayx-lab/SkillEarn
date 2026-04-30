@@ -1,6 +1,6 @@
 // users.js
 // FINAL PRODUCTION VERSION
-// OTP + Country + Crypto Withdrawals + Fees + Admin Approval + Fraud Protection
+// OTP + Country + Escrow + Tasks + Withdrawals + Fraud Protection
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -40,11 +40,7 @@ async function sendOTP(email, code) {
       from: process.env.FROM_EMAIL,
       to: email,
       subject: "Verify your SkillEarn account",
-      html: `
-        <h2>SkillEarn Verification</h2>
-        <h1>${code}</h1>
-        <p>Expires in 10 minutes</p>
-      `
+      html: `<h2>SkillEarn</h2><h1>${code}</h1><p>Expires in 10 mins</p>`
     });
   } catch (err) {
     console.error("EMAIL ERROR:", err.message);
@@ -109,7 +105,9 @@ router.post("/api/auth/verify-email", async (req, res) => {
   }
 
   await pool.query(
-    `UPDATE users SET email_verified=true, otp_code=NULL WHERE email=$1`,
+    `UPDATE users
+     SET email_verified=true, otp_code=NULL, otp_expires=NULL
+     WHERE email=$1`,
     [email]
   );
 
@@ -119,92 +117,69 @@ router.post("/api/auth/verify-email", async (req, res) => {
 /* ==========================================
 LOGIN
 ========================================== */
-router.post(
-  "/api/auth/login",
-  async (req, res) => {
-    try {
-      const pool = req.app.locals.pool;
+router.post("/api/auth/login", async (req, res) => {
+  try {
+    const pool = req.app.locals.pool;
+    const { email, password } = req.body;
 
-      const { email, password } = req.body;
+    const result = await pool.query(
+      "SELECT * FROM users WHERE email=$1",
+      [email]
+    );
 
-      const result = await pool.query(
-        "SELECT * FROM users WHERE email=$1",
-        [email]
-      );
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: "Invalid login" });
+    }
 
-      if (result.rows.length === 0) {
-        return res.status(400).json({
-          message: "Invalid login"
-        });
-      }
+    const user = result.rows[0];
 
-      const user = result.rows[0];
+    const valid = await bcrypt.compare(password, user.password_hash);
 
-      const valid = await bcrypt.compare(
-        password,
-        user.password_hash
-      );
+    if (!valid) {
+      return res.status(400).json({ message: "Invalid login" });
+    }
 
-      if (!valid) {
-        return res.status(400).json({
-          message: "Invalid login"
-        });
-      }
-
-      if (user.email_verified !== true) {
-        return res.status(403).json({
-          message:
-            "Please verify your email first"
-        });
-      }
-
-      // OPTIONAL: track device/IP (good for fraud detection)
-      await pool.query(
-        `
-        UPDATE users
-        SET
-          last_ip = $1,
-          last_user_agent = $2
-        WHERE id = $3
-        `,
-        [
-          req.ip,
-          req.headers["user-agent"],
-          user.id
-        ]
-      );
-
-      const token = jwt.sign(
-        {
-          id: user.id,
-          email: user.email,
-          role: "user",
-          country: user.country
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-
-      // ✅ SAFE RESPONSE (NO sensitive data)
-      res.json({
-        message: "Login successful",
-        token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          balance: user.balance,
-          country: user.country
-        }
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        message: error.message
+    if (!user.email_verified) {
+      return res.status(403).json({
+        message: "Verify your email first"
       });
     }
+
+    // track device
+    await pool.query(
+      `UPDATE users
+       SET last_ip=$1, last_user_agent=$2
+       WHERE id=$3`,
+      [req.ip, req.headers["user-agent"], user.id]
+    );
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        role: "user",
+        country: user.country
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      message: "Login successful",
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        balance: user.balance,
+        country: user.country
+      }
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
-);
+});
 
 /* ==========================================
 DASHBOARD
@@ -243,39 +218,40 @@ router.get("/api/users/tasks", auth, async (req, res) => {
 });
 
 /* ==========================================
-   WALLET
+SUBMIT TASK (ESCROW FLOW)
 ========================================== */
-router.get(
-  "/api/users/wallet",
-  auth,
-  async (req, res) => {
-    try {
-      const pool = req.app.locals.pool;
+router.post("/api/users/submit-task", auth, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { task_id, proof } = req.body;
 
-      const result = await pool.query(
-        `
-        SELECT balance
-        FROM users
-        WHERE id=$1
-        `,
-        [req.user.id]
-      );
+  await pool.query(
+    `INSERT INTO submissions
+     (user_id,task_id,proof,status)
+     VALUES($1,$2,$3,'PENDING')`,
+    [req.user.id, task_id, proof]
+  );
 
-      res.json({
-        balance: Number(result.rows[0]?.balance || 0),
-        currency:
-          req.user.country === "NG"
-            ? "NGN"
-            : "USD"
-      });
+  res.json({
+    message: "Submitted, awaiting approval"
+  });
+});
 
-    } catch (error) {
-      res.status(500).json({
-        message: error.message
-      });
-    }
-  }
-);
+/* ==========================================
+WALLET
+========================================== */
+router.get("/api/users/wallet", auth, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const result = await pool.query(
+    "SELECT balance FROM users WHERE id=$1",
+    [req.user.id]
+  );
+
+  res.json({
+    balance: Number(result.rows[0]?.balance || 0),
+    currency: req.user.country === "NG" ? "NGN" : "USD"
+  });
+});
 
 /* ==========================================
 WITHDRAW (BANK + CRYPTO)
@@ -319,7 +295,7 @@ router.post("/api/users/withdraw", auth, async (req, res) => {
     const fee = (amount * FEE_PERCENT) / 100;
     const finalAmount = amount - fee;
 
-    // FRAUD CHECK
+    // anti-spam
     const recent = await pool.query(
       `SELECT COUNT(*) FROM withdrawals
        WHERE user_id=$1 AND created_at > NOW() - INTERVAL '5 minutes'`,
@@ -328,7 +304,7 @@ router.post("/api/users/withdraw", auth, async (req, res) => {
 
     if (Number(recent.rows[0].count) > 3) {
       return res.status(429).json({
-        message: "Too many requests. Try later."
+        message: "Too many requests"
       });
     }
 
@@ -336,8 +312,7 @@ router.post("/api/users/withdraw", auth, async (req, res) => {
       `INSERT INTO withdrawals
       (user_id,amount,fee,final_amount,
        bank_name,account_number,account_name,
-       crypto_address,crypto_network,
-       type,status)
+       crypto_address,crypto_network,type,status)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING')`,
       [
         req.user.id,
