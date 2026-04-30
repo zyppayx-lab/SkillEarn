@@ -1,11 +1,21 @@
-// payments.js (FINAL CLEAN - NO ERRORS)
+// payments.js (FINAL PRODUCTION SAFE VERSION)
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
 
+// ✅ Ensure fetch works on all Node versions
+let fetchFn;
+try {
+  fetchFn = fetch;
+} catch {
+  fetchFn = require("node-fetch");
+}
+
 const router = express.Router();
 
-/* AUTH */
+/* ==========================================
+   AUTH
+========================================== */
 function auth(req, res, next) {
   const token = (req.headers.authorization || "").replace("Bearer ", "");
 
@@ -24,7 +34,9 @@ function businessOnly(req, res, next) {
   next();
 }
 
-/* PRICING */
+/* ==========================================
+   PRICING
+========================================== */
 function calcPrice(purpose, category, qty) {
   qty = Number(qty) || 1;
 
@@ -56,9 +68,11 @@ function getPrefix(purpose) {
   }[purpose];
 }
 
-/* PAYSTACK */
+/* ==========================================
+   PAYSTACK INIT
+========================================== */
 async function initPaystack(email, amount, ref, meta) {
-  const res = await fetch("https://api.paystack.co/transaction/initialize", {
+  const res = await fetchFn("https://api.paystack.co/transaction/initialize", {
     method: "POST",
     headers: {
       Authorization: "Bearer " + process.env.PAYSTACK_SECRET_KEY,
@@ -75,7 +89,9 @@ async function initPaystack(email, amount, ref, meta) {
   return await res.json();
 }
 
-/* CREATE PAYMENT */
+/* ==========================================
+   CREATE PAYSTACK PAYMENT
+========================================== */
 router.post("/api/paystack/create-payment", auth, businessOnly, async (req, res) => {
   try {
     const { email, purpose, category, qty } = req.body;
@@ -98,6 +114,14 @@ router.post("/api/paystack/create-payment", auth, businessOnly, async (req, res)
 
     const data = await initPaystack(email, amount, ref, metadata);
 
+    // ✅ SAFE CHECK
+    if (!data.status || !data.data) {
+      console.error("❌ Paystack error:", data);
+      return res.status(400).json({
+        message: "Failed to initialize payment"
+      });
+    }
+
     res.json({
       currency: "NGN",
       amount,
@@ -106,12 +130,14 @@ router.post("/api/paystack/create-payment", auth, businessOnly, async (req, res)
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("❌ Paystack init error:", err);
     res.status(500).json({ message: "Payment init failed" });
   }
 });
 
-/* CRYPTO */
+/* ==========================================
+   CREATE CRYPTO PAYMENT
+========================================== */
 router.post("/api/crypto/create-payment", auth, businessOnly, async (req, res) => {
   try {
     const { purpose, category, qty, pay_currency } = req.body;
@@ -124,7 +150,7 @@ router.post("/api/crypto/create-payment", auth, businessOnly, async (req, res) =
     const usd = (amountNGN / 1600).toFixed(2);
     const ref = "CRYPTO_" + Date.now();
 
-    const response = await fetch("https://api.nowpayments.io/v1/payment", {
+    const response = await fetchFn("https://api.nowpayments.io/v1/payment", {
       method: "POST",
       headers: {
         "x-api-key": process.env.CRYPTO_API_KEY,
@@ -135,7 +161,9 @@ router.post("/api/crypto/create-payment", auth, businessOnly, async (req, res) =
         price_currency: "usd",
         pay_currency: pay_currency || "usdttrc20",
         order_id: ref,
-        order_description: `${purpose}|${category}|${req.user.id}`
+
+        // ✅ FIXED METADATA (VERY IMPORTANT)
+        order_description: `${purpose}|${category}|${req.user.id}|${purpose} campaign|${category} job`
       })
     });
 
@@ -150,7 +178,7 @@ router.post("/api/crypto/create-payment", auth, businessOnly, async (req, res) =
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("❌ Crypto error:", err);
     res.status(500).json({ message: "Crypto payment failed" });
   }
 });
