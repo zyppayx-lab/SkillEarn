@@ -1,5 +1,5 @@
 // payments-webhook.js
-// FINAL PRODUCTION VERSION (STABLE)
+// FINAL PRODUCTION VERSION (FIXED ROUTING)
 // Paystack + Crypto Webhooks
 // Metadata-safe + Duplicate-safe + Logging enabled
 
@@ -12,7 +12,7 @@ const router = express.Router();
    PAYSTACK WEBHOOK
 ========================================== */
 router.post(
-  "/api/webhook/paystack",
+  "/paystack", // ✅ FIXED (NO /api/webhook)
   express.raw({ type: "application/json" }),
   async (req, res) => {
     console.log("🔥 PAYSTACK WEBHOOK HIT");
@@ -45,9 +45,7 @@ router.post(
       const reference = data.reference;
       const amount = Number(data.amount) / 100;
 
-      /* ==========================================
-         DUPLICATE CHECK
-      ========================================== */
+      /* DUPLICATE CHECK */
       const exists = await pool.query(
         "SELECT id FROM payments WHERE reference=$1",
         [reference]
@@ -58,9 +56,7 @@ router.post(
         return res.end();
       }
 
-      /* ==========================================
-         METADATA (CRITICAL)
-      ========================================== */
+      /* METADATA */
       const meta = data.metadata || {};
 
       const vendorId = Number(meta.vendor_id || 0);
@@ -70,15 +66,11 @@ router.post(
       const title = meta.title || "Campaign";
       const description = meta.description || "";
 
-      /* ==========================================
-         ESCROW SPLIT
-      ========================================== */
+      /* ESCROW */
       const escrow = amount * 0.1;
       const released = amount - escrow;
 
-      /* ==========================================
-         SAVE PAYMENT
-      ========================================== */
+      /* SAVE PAYMENT */
       await pool.query(
         `
         INSERT INTO payments
@@ -107,9 +99,7 @@ router.post(
 
       console.log("✅ Payment saved:", reference);
 
-      /* ==========================================
-         CREATE JOB / TASK
-      ========================================== */
+      /* CREATE JOB */
       await createJob(pool, purpose, {
         vendor_id: vendorId,
         category,
@@ -119,7 +109,7 @@ router.post(
         payment_ref: reference
       });
 
-      console.log("✅ Job created for:", reference);
+      console.log("✅ Job created");
 
       return res.end();
 
@@ -134,7 +124,7 @@ router.post(
    CRYPTO WEBHOOK
 ========================================== */
 router.post(
-  "/api/webhook/crypto",
+  "/crypto", // ✅ FIXED
   express.json(),
   async (req, res) => {
     console.log("🔥 CRYPTO WEBHOOK HIT");
@@ -149,7 +139,6 @@ router.post(
 
       const reference = data.order_id;
 
-      /* DUPLICATE CHECK */
       const exists = await pool.query(
         "SELECT id FROM payments WHERE reference=$1",
         [reference]
@@ -159,7 +148,6 @@ router.post(
         return res.end();
       }
 
-      /* META PARSE */
       const meta = (data.order_description || "").split("|");
 
       const purpose = meta[0] || "task";
@@ -173,7 +161,6 @@ router.post(
       const escrow = amount * 0.1;
       const released = amount - escrow;
 
-      /* SAVE PAYMENT */
       await pool.query(
         `
         INSERT INTO payments
@@ -200,7 +187,7 @@ router.post(
         ]
       );
 
-      console.log("✅ Crypto payment saved:", reference);
+      console.log("✅ Crypto payment saved");
 
       await createJob(pool, purpose, {
         vendor_id: vendorId,
@@ -224,136 +211,58 @@ router.post(
    AUTO CREATE JOBS
 ========================================== */
 async function createJob(pool, purpose, data) {
-  /* TASK */
   if (purpose === "task") {
     await pool.query(
       `
       INSERT INTO tasks
-      (
-        vendor_id,
-        title,
-        description,
-        reward,
-        paid,
-        payment_reference,
-        status
-      )
-      VALUES
-      ($1,$2,$3,50,true,$4,'ACTIVE')
+      (vendor_id,title,description,reward,paid,payment_reference,status)
+      VALUES ($1,$2,$3,50,true,$4,'ACTIVE')
       `,
-      [
-        data.vendor_id,
-        data.title,
-        data.description,
-        data.payment_ref
-      ]
+      [data.vendor_id, data.title, data.description, data.payment_ref]
     );
   }
 
-  /* SOCIAL */
   if (purpose === "social") {
     await pool.query(
       `
       INSERT INTO social_tasks
-      (
-        vendor_id,
-        platform,
-        action,
-        title,
-        description,
-        reward,
-        paid,
-        payment_reference,
-        status
-      )
-      VALUES
-      ($1,'instagram',$2,$3,$4,20,true,$5,'ACTIVE')
+      (vendor_id,platform,action,title,description,reward,paid,payment_reference,status)
+      VALUES ($1,'instagram',$2,$3,$4,20,true,$5,'ACTIVE')
       `,
-      [
-        data.vendor_id,
-        data.category,
-        data.title,
-        data.description,
-        data.payment_ref
-      ]
+      [data.vendor_id, data.category, data.title, data.description, data.payment_ref]
     );
   }
 
-  /* FREELANCE */
   if (purpose === "freelance") {
     await pool.query(
       `
       INSERT INTO freelance_jobs
-      (
-        vendor_id,
-        title,
-        description,
-        budget,
-        paid,
-        payment_reference,
-        status
-      )
-      VALUES
-      ($1,$2,$3,5000,true,$4,'ACTIVE')
+      (vendor_id,title,description,budget,paid,payment_reference,status)
+      VALUES ($1,$2,$3,5000,true,$4,'ACTIVE')
       `,
-      [
-        data.vendor_id,
-        data.title,
-        data.description,
-        data.payment_ref
-      ]
+      [data.vendor_id, data.title, data.description, data.payment_ref]
     );
   }
 
-  /* HIRING */
   if (purpose === "hiring") {
     await pool.query(
       `
       INSERT INTO hiring_jobs
-      (
-        vendor_id,
-        title,
-        description,
-        salary,
-        paid,
-        payment_reference,
-        status
-      )
-      VALUES
-      ($1,$2,$3,'Negotiable',true,$4,'ACTIVE')
+      (vendor_id,title,description,salary,paid,payment_reference,status)
+      VALUES ($1,$2,$3,'Negotiable',true,$4,'ACTIVE')
       `,
-      [
-        data.vendor_id,
-        data.title,
-        data.description,
-        data.payment_ref
-      ]
+      [data.vendor_id, data.title, data.description, data.payment_ref]
     );
   }
 
-  /* INFLUENCER */
   if (purpose === "influencer") {
     await pool.query(
       `
       INSERT INTO influencer_jobs
-      (
-        vendor_id,
-        title,
-        description,
-        budget,
-        paid,
-        payment_reference,
-        status
-      )
-      VALUES
-      ($1,$2,$3,10000,true,$4,'ACTIVE')
+      (vendor_id,title,description,budget,paid,payment_reference,status)
+      VALUES ($1,$2,$3,10000,true,$4,'ACTIVE')
       `,
-      [
-        data.vendor_id,
-        data.title,
-        data.description,
-        data.payment_ref
-      ]
+      [data.vendor_id, data.title, data.description, data.payment_ref]
     );
   }
 }
