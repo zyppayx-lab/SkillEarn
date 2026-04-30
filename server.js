@@ -1,6 +1,6 @@
 // server.js
-// FINAL UPDATED PRODUCTION VERSION
-// Uses updated security.js + webhook safe ordering + OTP protection
+// FINAL CLEAN PRODUCTION VERSION
+// withdraw.js removed (now handled inside users.js)
 
 require("dotenv").config();
 
@@ -14,23 +14,11 @@ const app = express();
 /* ==========================================
    ROUTES
 ========================================== */
-const paymentRoutes =
-  require("./payments");
-
-const webhookRoutes =
-  require("./payments-webhook");
-
-const adminRoutes =
-  require("./admin");
-
-const userRoutes =
-  require("./users");
-
-const businessRoutes =
-  require("./business");
-
-const withdrawRoutes =
-  require("./withdraw");
+const paymentRoutes = require("./payments");
+const webhookRoutes = require("./payments-webhook");
+const adminRoutes = require("./admin");
+const userRoutes = require("./users");
+const businessRoutes = require("./business");
 
 /* ==========================================
    SECURITY IMPORT
@@ -49,296 +37,142 @@ const {
 /* ==========================================
    SAFE SETTINGS
 ========================================== */
-app.disable(
-  "x-powered-by"
-);
-
-app.set(
-  "trust proxy",
-  1
-);
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
 
 /* ==========================================
    DATABASE
 ========================================== */
 const pool = new Pool({
-  connectionString:
-    process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL,
   ssl:
-    process.env.NODE_ENV ===
-    "production"
-      ? {
-          rejectUnauthorized:
-            false
-        }
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
       : false
 });
 
 app.locals.pool = pool;
 
 /* ==========================================
-   CORE MIDDLEWARE FIRST
+   CORE MIDDLEWARE
 ========================================== */
-app.use(
-  cors({
-    origin: true,
-    credentials: true
-  })
-);
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 
-app.use(
-  express.json({
-    limit: "2mb"
-  })
-);
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({
+  extended: true,
+  limit: "2mb"
+}));
 
-app.use(
-  express.urlencoded({
-    extended: true,
-    limit: "2mb"
-  })
-);
-
-app.use(
-  session({
-    secret:
-      process.env
-        .SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure:
-        process.env
-          .NODE_ENV ===
-        "production",
-      sameSite: "lax",
-      maxAge:
-        7 *
-        24 *
-        60 *
-        60 *
-        1000
-    }
-  })
-);
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  }
+}));
 
 /* ==========================================
    SECURITY
 ========================================== */
 applySecurity(app);
 
-app.use(
-  apiLimiter
-);
-
-app.use(
-  securityRoutes
-);
+app.use(apiLimiter);
+app.use(securityRoutes);
 
 /* LOGIN LIMITERS */
-app.use(
-  "/api/auth/login",
-  loginLimiter
-);
-
-app.use(
-  "/api/business/login",
-  loginLimiter
-);
-
-app.use(
-  "/api/admin/login",
-  loginLimiter
-);
+app.use("/api/auth/login", loginLimiter);
+app.use("/api/business/login", loginLimiter);
+app.use("/api/admin/login", loginLimiter);
 
 /* REGISTER LIMITERS */
-app.use(
-  "/api/auth/register",
-  registerLimiter
-);
-
-app.use(
-  "/api/business/register",
-  registerLimiter
-);
+app.use("/api/auth/register", registerLimiter);
+app.use("/api/business/register", registerLimiter);
 
 /* OTP LIMITERS */
-app.use(
-  "/api/auth/resend-otp",
-  otpLimiter
-);
-
-app.use(
-  "/api/business/resend-otp",
-  otpLimiter
-);
-
-app.use(
-  "/api/auth/verify-email",
-  otpLimiter
-);
-
-app.use(
-  "/api/business/verify-email",
-  otpLimiter
-);
+app.use("/api/auth/resend-otp", otpLimiter);
+app.use("/api/business/resend-otp", otpLimiter);
+app.use("/api/auth/verify-email", otpLimiter);
+app.use("/api/business/verify-email", otpLimiter);
 
 /* PAYMENT LIMITERS */
-app.use(
-  "/api/paystack",
-  paymentLimiter
-);
+app.use("/api/paystack", paymentLimiter);
+app.use("/api/crypto", paymentLimiter);
 
-app.use(
-  "/api/crypto",
-  paymentLimiter
-);
-
-/* WITHDRAW LIMITERS */
-app.use(
-  "/api/withdraw",
-  withdrawLimiter
-);
+/* WITHDRAW LIMITER (still valid) */
+app.use("/api/users/withdraw", withdrawLimiter);
 
 /* ==========================================
    WEBHOOK ROUTES
-   mounted after body parser
 ========================================== */
-app.use(
-  webhookRoutes
-);
+app.use(webhookRoutes);
 
 /* ==========================================
    MAIN ROUTES
 ========================================== */
-app.use(
-  paymentRoutes
-);
-
-app.use(
-  adminRoutes
-);
-
-app.use(
-  userRoutes
-);
-
-app.use(
-  businessRoutes
-);
-
-app.use(
-  withdrawRoutes
-);
+app.use(paymentRoutes);
+app.use(adminRoutes);
+app.use(userRoutes);
+app.use(businessRoutes);
 
 /* ==========================================
    HEALTH CHECKS
 ========================================== */
-app.get(
-  "/",
-  (req, res) => {
-    res.json({
-      status:
-        "SkillEarn Backend Running",
-      mode:
-        process.env
-          .NODE_ENV ||
-        "development"
-    });
+app.get("/", (req, res) => {
+  res.json({
+    status: "SkillEarn Backend Running",
+    mode: process.env.NODE_ENV || "development"
+  });
+});
+
+app.get("/readyz", (req, res) => {
+  res.json({ status: "ready" });
+});
+
+app.get("/livez", (req, res) => {
+  res.json({ status: "live" });
+});
+
+app.get("/db-check", async (req, res) => {
+  try {
+    await pool.query("SELECT NOW()");
+    res.json({ status: "Database connected" });
+  } catch {
+    res.status(500).json({ status: "Database failed" });
   }
-);
-
-app.get(
-  "/readyz",
-  (req, res) => {
-    res.json({
-      status:
-        "ready"
-    });
-  }
-);
-
-app.get(
-  "/livez",
-  (req, res) => {
-    res.json({
-      status:
-        "live"
-    });
-  }
-);
-
-app.get(
-  "/db-check",
-  async (
-    req,
-    res
-  ) => {
-    try {
-      await pool.query(
-        "SELECT NOW()"
-      );
-
-      res.json({
-        status:
-          "Database connected"
-      });
-
-    } catch {
-      res.status(500).json({
-        status:
-          "Database failed"
-      });
-    }
-  }
-);
+});
 
 /* ==========================================
    404
 ========================================== */
-app.use(
-  (req, res) => {
-    res.status(404).json({
-      message:
-        "Route not found"
-    });
-  }
-);
+app.use((req, res) => {
+  res.status(404).json({
+    message: "Route not found"
+  });
+});
 
 /* ==========================================
    ERROR HANDLER
 ========================================== */
-app.use(
-  (
-    err,
-    req,
-    res,
-    next
-  ) => {
-    console.error(
-      err
-    );
-
-    res.status(500).json({
-      message:
-        "Internal server error"
-    });
-  }
-);
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({
+    message: "Internal server error"
+  });
+});
 
 /* ==========================================
    START SERVER
 ========================================== */
-const PORT =
-  process.env.PORT ||
-  5000;
+const PORT = process.env.PORT || 5000;
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `SkillEarn running on ${PORT}`
-    );
-  }
-);
+app.listen(PORT, () => {
+  console.log(`SkillEarn running on ${PORT}`);
+});
