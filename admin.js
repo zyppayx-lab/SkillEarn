@@ -1,6 +1,6 @@
 // admin.js
 // FINAL MASTER ADMIN VERSION
-// Dashboard + approvals + bans + withdrawals + analytics + FRAUD ALERT SYSTEM
+// Fraud + Escrow Control + Withdrawals + Analytics
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -12,27 +12,19 @@ const router = express.Router();
 AUTH
 ========================================== */
 function auth(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.replace("Bearer ", "");
+  const token = (req.headers.authorization || "").replace("Bearer ", "");
 
   try {
-    req.user = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch {
-    return res.status(401).json({
-      message: "Unauthorized"
-    });
+    return res.status(401).json({ message: "Unauthorized" });
   }
 }
 
 function adminOnly(req, res, next) {
   if (req.user.role !== "admin") {
-    return res.status(403).json({
-      message: "Admin only"
-    });
+    return res.status(403).json({ message: "Admin only" });
   }
   next();
 }
@@ -43,7 +35,6 @@ ADMIN LOGIN
 router.post("/api/admin/login", async (req, res) => {
   try {
     const pool = req.app.locals.pool;
-
     const { email, password } = req.body;
 
     const result = await pool.query(
@@ -52,9 +43,7 @@ router.post("/api/admin/login", async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(400).json({
-        message: "Invalid login"
-      });
+      return res.status(400).json({ message: "Invalid login" });
     }
 
     const admin = result.rows[0];
@@ -65,9 +54,7 @@ router.post("/api/admin/login", async (req, res) => {
     );
 
     if (!valid) {
-      return res.status(400).json({
-        message: "Invalid login"
-      });
+      return res.status(400).json({ message: "Invalid login" });
     }
 
     const token = jwt.sign(
@@ -86,14 +73,12 @@ router.post("/api/admin/login", async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({
-      message: error.message
-    });
+    res.status(500).json({ message: error.message });
   }
 });
 
 /* ==========================================
-DASHBOARD
+DASHBOARD (FULL FINANCIAL VIEW)
 ========================================== */
 router.get("/api/admin/dashboard", auth, adminOnly, async (req, res) => {
   try {
@@ -115,88 +100,164 @@ router.get("/api/admin/dashboard", auth, adminOnly, async (req, res) => {
       WHERE status='OPEN'
     `);
 
+    const escrow = await pool.query(`
+      SELECT COALESCE(SUM(remaining_amount),0) total
+      FROM escrow
+    `);
+
     res.json({
       users: users.rows[0].total,
       vendors: vendors.rows[0].total,
       tasks: tasks.rows[0].total,
       pending_withdrawals: withdrawals.rows[0].total,
-      open_fraud_cases: fraud.rows[0].total
+      open_fraud_cases: fraud.rows[0].total,
+      total_escrow_locked: Number(escrow.rows[0].total)
     });
 
   } catch (error) {
-    res.status(500).json({
-      message: error.message
-    });
+    res.status(500).json({ message: error.message });
   }
 });
 
 /* ==========================================
-FRAUD ALERTS LIST
+ESCROW LIST
 ========================================== */
-router.get("/api/admin/fraud-alerts", auth, adminOnly, async (req, res) => {
+router.get("/api/admin/escrow", auth, adminOnly, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
 
     const result = await pool.query(`
-      SELECT *
-      FROM fraud_logs
+      SELECT * FROM escrow
       ORDER BY id DESC
     `);
 
     res.json(result.rows);
 
   } catch (error) {
-    res.status(500).json({
-      message: error.message
-    });
+    res.status(500).json({ message: error.message });
   }
 });
 
 /* ==========================================
-MARK FRAUD AS RESOLVED
+FORCE ESCROW RELEASE (PAY USER)
 ========================================== */
-router.post("/api/admin/fraud/resolve", auth, adminOnly, async (req, res) => {
+router.post("/api/admin/escrow/release", auth, adminOnly, async (req, res) => {
+  try {
+    const pool = req.app.locals.pool;
+    const { submission_id } = req.body;
+
+    const sub = await pool.query(`
+      SELECT s.*, t.reward
+      FROM submissions s
+      JOIN tasks t ON s.task_id=t.id
+      WHERE s.id=$1
+    `, [submission_id]);
+
+    if (sub.rows.length === 0) {
+      return res.status(404).json({ message: "Submission not found" });
+    }
+
+    const row = sub.rows[0];
+
+    // CREDIT USER
+    await pool.query(`
+      UPDATE users
+      SET balance = balance + $1
+      WHERE id=$2
+    `, [row.reward, row.user_id]);
+
+    // DEDUCT ESCROW
+    await pool.query(`
+      UPDATE escrow
+      SET remaining_amount = remaining_amount - $1
+      WHERE task_id=$2
+    `, [row.reward, row.task_id]);
+
+    // UPDATE STATUS
+    await pool.query(`
+      UPDATE submissions
+      SET status='APPROVED'
+      WHERE id=$1
+    `, [submission_id]);
+
+    res.json({
+      message: "Escrow released manually"
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+/* ==========================================
+REFUND ESCROW
+========================================== */
+router.post("/api/admin/escrow/refund", auth, adminOnly, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
 
     await pool.query(`
-      UPDATE fraud_logs
-      SET status='RESOLVED'
+      UPDATE escrow
+      SET status='REFUNDED',
+          remaining_amount=0
       WHERE id=$1
-    `, [req.body.fraud_id]);
+    `, [req.body.escrow_id]);
 
     res.json({
-      message: "Fraud case resolved"
+      message: "Escrow refunded"
     });
 
   } catch (error) {
-    res.status(500).json({
-      message: error.message
-    });
+    res.status(500).json({ message: error.message });
   }
+});
+
+/* ==========================================
+FRAUD ALERTS
+========================================== */
+router.get("/api/admin/fraud-alerts", auth, adminOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const result = await pool.query(`
+    SELECT *
+    FROM fraud_logs
+    ORDER BY id DESC
+  `);
+
+  res.json(result.rows);
+});
+
+/* ==========================================
+RESOLVE FRAUD
+========================================== */
+router.post("/api/admin/fraud/resolve", auth, adminOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  await pool.query(`
+    UPDATE fraud_logs
+    SET status='RESOLVED'
+    WHERE id=$1
+  `, [req.body.fraud_id]);
+
+  res.json({
+    message: "Fraud case resolved"
+  });
 });
 
 /* ==========================================
 FLAGGED USERS
 ========================================== */
 router.get("/api/admin/flagged-users", auth, adminOnly, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
+  const pool = req.app.locals.pool;
 
-    const result = await pool.query(`
-      SELECT id, name, email, fraud_score, status
-      FROM users
-      WHERE fraud_score > 50
-      ORDER BY fraud_score DESC
-    `);
+  const result = await pool.query(`
+    SELECT id,name,email,fraud_score,status
+    FROM users
+    WHERE fraud_score > 50
+    ORDER BY fraud_score DESC
+  `);
 
-    res.json(result.rows);
-
-  } catch (error) {
-    res.status(500).json({
-      message: error.message
-    });
-  }
+  res.json(result.rows);
 });
 
 /* ==========================================
@@ -211,13 +272,11 @@ router.post("/api/admin/user/block", auth, adminOnly, async (req, res) => {
     WHERE id=$1
   `, [req.body.user_id]);
 
-  res.json({
-    message: "User blocked"
-  });
+  res.json({ message: "User blocked" });
 });
 
 /* ==========================================
-APPROVE WITHDRAWAL
+WITHDRAW APPROVE
 ========================================== */
 router.post("/api/admin/withdraw/approve", auth, adminOnly, async (req, res) => {
   const pool = req.app.locals.pool;
@@ -228,13 +287,11 @@ router.post("/api/admin/withdraw/approve", auth, adminOnly, async (req, res) => 
     WHERE id=$1
   `, [req.body.withdrawal_id]);
 
-  res.json({
-    message: "Withdrawal approved"
-  });
+  res.json({ message: "Withdrawal approved" });
 });
 
 /* ==========================================
-REJECT WITHDRAWAL
+WITHDRAW REJECT
 ========================================== */
 router.post("/api/admin/withdraw/reject", auth, adminOnly, async (req, res) => {
   const pool = req.app.locals.pool;
@@ -244,9 +301,7 @@ router.post("/api/admin/withdraw/reject", auth, adminOnly, async (req, res) => {
   `, [req.body.withdrawal_id]);
 
   if (w.rows.length === 0) {
-    return res.status(404).json({
-      message: "Not found"
-    });
+    return res.status(404).json({ message: "Not found" });
   }
 
   const row = w.rows[0];
