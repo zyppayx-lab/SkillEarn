@@ -409,13 +409,19 @@ router.post(
 
 
     res.json({
-      message: "Login successful",
-      token,
-      user
-    });
+  message: "Login successful",
+  token,
 
+  user: {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    country: user.country,
+    balance: user.balance,
+    referral_code: user.referral_code
   }
-);
+});
 
 /* ==========================================
 FORGOT PASSWORD
