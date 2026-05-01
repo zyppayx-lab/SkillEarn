@@ -270,6 +270,47 @@ router.post(
   }
 );
 
+/* ==========================================
+RESEND OTP
+========================================== */
+router.post(
+  "/api/auth/resend-otp",
+  async (req, res) => {
+
+    const pool = req.app.locals.pool;
+    const { email } = req.body;
+
+    const otp =
+      Math.floor(
+        100000 + Math.random() * 900000
+      ).toString();
+
+    await pool.query(
+      `
+      UPDATE users
+      SET
+      otp_code=$1,
+      otp_expires=
+      NOW()+INTERVAL '10 minutes'
+      WHERE email=$2
+      `,
+      [
+        otp,
+        email
+      ]
+    );
+
+    await sendOTP(
+      email,
+      otp
+    );
+
+    res.json({
+      message: "OTP resent"
+    });
+
+  }
+);
 
 /* ==========================================
 LOGIN
@@ -376,6 +417,160 @@ router.post(
   }
 );
 
+/* ==========================================
+FORGOT PASSWORD
+========================================== */
+router.post(
+  "/api/auth/forgot-password",
+  async (req, res) => {
+
+    const pool =
+      req.app.locals.pool;
+
+    const { email } =
+      req.body;
+
+    const otp =
+      Math.floor(
+        100000 + Math.random() * 900000
+      ).toString();
+
+    await pool.query(
+      `
+      UPDATE users
+      SET
+      reset_otp=$1,
+      reset_otp_expires=
+      NOW()+INTERVAL '10 minutes'
+      WHERE email=$2
+      `,
+      [
+        otp,
+        email
+      ]
+    );
+
+    await sendOTP(
+      email,
+      otp
+    );
+
+    res.json({
+      message:
+        "Reset OTP sent"
+    });
+
+  }
+);
+/* ==========================================
+RESET PASSWORD
+========================================== */
+router.post(
+  "/api/auth/reset-password",
+  async (req, res) => {
+
+    const pool =
+      req.app.locals.pool;
+
+    const {
+      email,
+      otp,
+      new_password
+    } = req.body;
+
+    const result =
+      await pool.query(
+        `
+        SELECT id
+        FROM users
+        WHERE email=$1
+        AND reset_otp=$2
+        AND reset_otp_expires > NOW()
+        `,
+        [
+          email,
+          otp
+        ]
+      );
+
+    if (!result.rows.length) {
+      return res.status(400).json({
+        message: "Invalid OTP"
+      });
+    }
+
+    const hash =
+      await bcrypt.hash(
+        new_password,
+        10
+      );
+
+    await pool.query(
+      `
+      UPDATE users
+      SET
+      password_hash=$1,
+      reset_otp=NULL,
+      reset_otp_expires=NULL
+      WHERE email=$2
+      `,
+      [
+        hash,
+        email
+      ]
+    );
+
+    res.json({
+      message:
+        "Password updated"
+    });
+
+  }
+);
+/* ==========================================
+DASHBOARD
+========================================== */
+router.get(
+  "/api/users/dashboard",
+  auth,
+  async (req, res) => {
+
+    const pool =
+      req.app.locals.pool;
+
+    const profile =
+      await pool.query(
+        `
+        SELECT
+        id,
+        name,
+        email,
+        balance
+        FROM users
+        WHERE id=$1
+        `,
+        [req.user.id]
+      );
+
+    const tasks =
+      await pool.query(
+        `
+        SELECT COUNT(*)
+        FROM tasks
+        WHERE status='ACTIVE'
+        `
+      );
+
+    res.json({
+      profile:
+        profile.rows[0],
+
+      available_tasks:
+        tasks.rows[0].count
+    });
+
+  }
+);
 
 /* ==========================================
 TASKS
@@ -619,7 +814,62 @@ router.post(
 
   }
 );
+/* ==========================================
+TRANSACTIONS
+========================================== */
+router.get(
+  "/api/users/transactions",
+  auth,
+  async (req, res) => {
 
+    const pool =
+      req.app.locals.pool;
+
+    const result =
+      await pool.query(
+        `
+        SELECT *
+        FROM transactions
+        WHERE user_id=$1
+        ORDER BY id DESC
+        `,
+        [req.user.id]
+      );
+
+    res.json(
+      result.rows
+    );
+
+  }
+);
+/* ==========================================
+NOTIFICATIONS
+========================================== */
+router.get(
+  "/api/users/notifications",
+  auth,
+  async (req, res) => {
+
+    const pool =
+      req.app.locals.pool;
+
+    const result =
+      await pool.query(
+        `
+        SELECT *
+        FROM notifications
+        WHERE user_id=$1
+        ORDER BY id DESC
+        `,
+        [req.user.id]
+      );
+
+    res.json(
+      result.rows
+    );
+
+  }
+);
 
 /* ==========================================
 REFERRALS
