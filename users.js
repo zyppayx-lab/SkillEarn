@@ -1,10 +1,12 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const { Resend } = require("resend");
 
 const router = express.Router();
 const resend = new Resend(process.env.RESEND_API_KEY);
+
 
 /* ==========================================
 AUTH
@@ -28,12 +30,16 @@ function auth(req, res, next) {
   }
 }
 
+
 /* ==========================================
 CONFIG
 ========================================== */
 const NAIRA_MIN = 1000;
-const CRYPTO_MIN = 20;
+const CRYPTO_MIN = 1;
 const FEE_PERCENT = 1.75;
+const NG_REFERRAL_REWARD = 500;
+const USD_REFERRAL_REWARD = 1;
+
 
 /* ==========================================
 OTP
@@ -43,86 +49,14 @@ async function sendOTP(email, code) {
     from: process.env.FROM_EMAIL,
     to: email,
     subject: "Verify your SkillEarn account",
-    html: `<h2>SkillEarn</h2>
-           <h1>${code}</h1>
-           <p>Expires in 10 mins</p>`
+    html: `
+      <h2>SkillEarn</h2>
+      <h1>${code}</h1>
+      <p>Expires in 10 minutes</p>
+    `
   });
 }
 
-/* ==========================================
-REFERRAL REWARD
-========================================== */
-async function releaseReferralReward(pool, userId) {
-
-  const userResult = await pool.query(
-    `
-    SELECT *
-    FROM users
-    WHERE id=$1
-    `,
-    [userId]
-  );
-
-  if (!userResult.rows.length) return;
-
-  const user = userResult.rows[0];
-
-  if (!user.referred_by) return;
-  if (user.referral_paid) return;
-
-  const reward =
-    user.country === "NG"
-      ? 500
-      : 1;
-
-  const currency =
-    user.country === "NG"
-      ? "NGN"
-      : "USD";
-
-  await pool.query(
-    `
-    UPDATE users
-    SET balance=balance+$1
-    WHERE id=$2
-    `,
-    [
-      reward,
-      user.referred_by
-    ]
-  );
-
-  await pool.query(
-    `
-    UPDATE users
-    SET referral_paid=true
-    WHERE id=$1
-    `,
-    [userId]
-  );
-
-  await pool.query(
-    `
-    UPDATE referral_earnings
-    SET released=true
-    WHERE referred_user_id=$1
-    `,
-    [userId]
-  );
-
-  await pool.query(
-    `
-    INSERT INTO transactions
-    (user_id, amount, type, reference)
-    VALUES ($1,$2,'referral',$3)
-    `,
-    [
-      user.referred_by,
-      reward,
-      "REF_" + userId
-    ]
-  );
-}
 
 /* ==========================================
 REGISTER
@@ -143,51 +77,34 @@ router.post(
         referral_code
       } = req.body;
 
+
       const exists = await pool.query(
-        `
-        SELECT id
-        FROM users
-        WHERE email=$1
-        `,
+        "SELECT id FROM users WHERE email=$1",
         [email]
       );
 
-      if (exists.rows.length) {
+      if (exists.rows.length > 0) {
         return res.status(400).json({
-          message: "Email already exists"
+          message: "Email already registered"
         });
       }
+
 
       const hash =
         await bcrypt.hash(password, 10);
 
       const otp =
         Math.floor(
-          100000 +
-          Math.random() * 900000
+          100000 + Math.random() * 900000
         ).toString();
 
-      let referredBy = null;
+      const myReferralCode =
+        crypto.randomBytes(4)
+          .toString("hex")
+          .toUpperCase();
 
-      if (referral_code) {
 
-        const ref =
-          await pool.query(
-            `
-            SELECT id
-            FROM users
-            WHERE referral_code=$1
-            `,
-            [referral_code]
-          );
-
-        if (ref.rows.length) {
-          referredBy =
-            ref.rows[0].id;
-        }
-      }
-
-      const user =
+      const created =
         await pool.query(
           `
           INSERT INTO users
@@ -202,11 +119,10 @@ router.post(
             otp_code,
             otp_expires,
             country,
-            referral_code,
-            referred_by,
-            referral_paid
+            referral_code
           )
-          VALUES(
+          VALUES
+          (
             $1,$2,$3,
             'user',
             0,
@@ -215,9 +131,7 @@ router.post(
             $4,
             NOW()+INTERVAL '10 minutes',
             $5,
-            md5(random()::text),
-            $6,
-            false
+            $6
           )
           RETURNING *
           `,
@@ -227,57 +141,73 @@ router.post(
             hash,
             otp,
             country || "NG",
-            referredBy
+            myReferralCode
           ]
         );
 
-      if (referredBy) {
 
-        const reward =
-          country === "NG"
-            ? 500
-            : 1;
+      const user =
+        created.rows[0];
 
-        await pool.query(
-          `
-          INSERT INTO referral_earnings
-          (
-            referrer_id,
-            referred_user_id,
-            amount,
-            currency,
-            released
-          )
-          VALUES($1,$2,$3,$4,false)
-          `,
-          [
-            referredBy,
-            user.rows[0].id,
-            reward,
-            country === "NG"
-              ? "NGN"
-              : "USD"
-          ]
-        );
+
+      /* REFERRAL */
+      if (referral_code) {
+
+        const ref =
+          await pool.query(
+            `
+            SELECT id
+            FROM users
+            WHERE referral_code=$1
+            `,
+            [referral_code]
+          );
+
+
+        if (ref.rows.length > 0) {
+
+          const referrerId =
+            ref.rows[0].id;
+
+
+          await pool.query(
+            `
+            UPDATE users
+            SET referred_by=$1
+            WHERE id=$2
+            `,
+            [
+              referrerId,
+              user.id
+            ]
+          );
+
+        }
+
       }
+
 
       await sendOTP(
         email,
         otp
       );
 
+
       res.json({
         message: "OTP sent"
       });
 
-    } catch (e) {
+    } catch (error) {
 
       res.status(500).json({
-        message: e.message
+        message: error.message
       });
+
     }
+
   }
 );
+
 
 /* ==========================================
 VERIFY EMAIL
@@ -294,41 +224,52 @@ router.post(
       otp
     } = req.body;
 
+
     const user =
       await pool.query(
         `
-        SELECT id
+        SELECT *
         FROM users
         WHERE email=$1
         AND otp_code=$2
         AND otp_expires > NOW()
         `,
-        [email, otp]
+        [
+          email,
+          otp
+        ]
       );
+
 
     if (!user.rows.length) {
 
       return res.status(400).json({
         message: "Invalid OTP"
       });
+
     }
+
 
     await pool.query(
       `
       UPDATE users
       SET
       email_verified=true,
-      otp_code=NULL
+      otp_code=NULL,
+      otp_expires=NULL
       WHERE email=$1
       `,
       [email]
     );
 
+
     res.json({
       message: "Verified"
     });
+
   }
 );
+
 
 /* ==========================================
 LOGIN
@@ -345,6 +286,7 @@ router.post(
       password
     } = req.body;
 
+
     const result =
       await pool.query(
         `
@@ -355,15 +297,19 @@ router.post(
         [email]
       );
 
+
     if (!result.rows.length) {
 
       return res.status(400).json({
         message: "Invalid login"
       });
+
     }
+
 
     const user =
       result.rows[0];
+
 
     const valid =
       await bcrypt.compare(
@@ -371,20 +317,41 @@ router.post(
         user.password_hash
       );
 
+
     if (!valid) {
 
       return res.status(400).json({
         message: "Invalid login"
       });
+
     }
+
 
     if (!user.email_verified) {
 
       return res.status(403).json({
-        message:
-          "Verify email first"
+        message: "Verify email first"
       });
+
     }
+
+
+    /* TRACK DEVICE */
+    await pool.query(
+      `
+      UPDATE users
+      SET
+      last_ip=$1,
+      last_user_agent=$2
+      WHERE id=$3
+      `,
+      [
+        req.ip,
+        req.headers["user-agent"],
+        user.id
+      ]
+    );
+
 
     const token =
       jwt.sign(
@@ -399,12 +366,16 @@ router.post(
         }
       );
 
+
     res.json({
+      message: "Login successful",
       token,
       user
     });
+
   }
 );
+
 
 /* ==========================================
 TASKS
@@ -417,23 +388,23 @@ router.get(
     const pool =
       req.app.locals.pool;
 
-    const tasks =
+    const result =
       await pool.query(
         `
-        SELECT
-        id,
-        title,
-        reward
+        SELECT *
         FROM tasks
         WHERE status='ACTIVE'
+        ORDER BY id DESC
         `
       );
 
     res.json(
-      tasks.rows
+      result.rows
     );
+
   }
 );
+
 
 /* ==========================================
 SUBMIT TASK
@@ -451,6 +422,7 @@ router.post(
       proof
     } = req.body;
 
+
     await pool.query(
       `
       INSERT INTO submissions
@@ -460,8 +432,10 @@ router.post(
         proof,
         status
       )
-      VALUES(
-        $1,$2,$3,'PENDING'
+      VALUES
+      (
+        $1,$2,$3,
+        'PENDING'
       )
       `,
       [
@@ -471,12 +445,14 @@ router.post(
       ]
     );
 
+
     res.json({
-      message:
-        "Submitted"
+      message: "Submitted"
     });
+
   }
 );
+
 
 /* ==========================================
 WALLET
@@ -489,7 +465,7 @@ router.get(
     const pool =
       req.app.locals.pool;
 
-    const wallet =
+    const result =
       await pool.query(
         `
         SELECT
@@ -502,11 +478,14 @@ router.get(
         [req.user.id]
       );
 
+
     res.json(
-      wallet.rows[0]
+      result.rows[0]
     );
+
   }
 );
+
 
 /* ==========================================
 WITHDRAW
@@ -523,10 +502,11 @@ router.post(
       amount,
       bank_name,
       account_number,
+      account_name,
       crypto_address,
-      crypto_network,
-      crypto_symbol
+      crypto_network
     } = req.body;
+
 
     const result =
       await pool.query(
@@ -538,37 +518,44 @@ router.post(
         [req.user.id]
       );
 
+
     const user =
       result.rows[0];
 
+
     const isNG =
       user.country === "NG";
+
 
     const min =
       isNG
         ? NAIRA_MIN
         : CRYPTO_MIN;
 
+
     if (amount < min) {
 
       return res.status(400).json({
-        message:
-          "Below minimum"
+        message: "Below minimum"
       });
+
     }
+
 
     if (amount > user.balance) {
 
       return res.status(400).json({
-        message:
-          "Insufficient"
+        message: "Insufficient balance"
       });
+
     }
+
 
     const fee =
       amount *
       FEE_PERCENT /
       100;
+
 
     await pool.query(
       `
@@ -580,14 +567,16 @@ router.post(
         type,
         bank_name,
         account_number,
+        account_name,
         crypto_address,
         crypto_network,
-        crypto_symbol,
         status
       )
-      VALUES(
+      VALUES
+      (
         $1,$2,$3,$4,
-        $5,$6,$7,$8,$9,
+        $5,$6,$7,
+        $8,$9,
         'PENDING'
       )
       `,
@@ -595,16 +584,20 @@ router.post(
         req.user.id,
         amount,
         fee,
+
         isNG
           ? "BANK"
           : "CRYPTO",
-        bank_name,
-        account_number,
-        crypto_address,
-        crypto_network,
-        crypto_symbol
+
+        bank_name || null,
+        account_number || null,
+        account_name || null,
+
+        crypto_address || null,
+        crypto_network || null
       ]
     );
+
 
     await pool.query(
       `
@@ -618,20 +611,18 @@ router.post(
       ]
     );
 
-    await releaseReferralReward(
-      pool,
-      req.user.id
-    );
 
     res.json({
       message:
         "Withdrawal submitted"
     });
+
   }
 );
 
+
 /* ==========================================
-REFERRAL TREE
+REFERRALS
 ========================================== */
 router.get(
   "/api/users/referrals",
@@ -641,30 +632,35 @@ router.get(
     const pool =
       req.app.locals.pool;
 
-    const refs =
+
+    const result =
       await pool.query(
         `
         SELECT
-        u.id,
         u.name,
-        u.email,
         r.amount,
         r.currency,
-        r.released
-        FROM users u
-        JOIN referral_earnings r
+        r.status,
+        r.created_at
+        FROM referral_earnings r
+        JOIN users u
         ON u.id =
         r.referred_user_id
         WHERE
         r.referrer_id=$1
+        ORDER BY
+        r.id DESC
         `,
         [req.user.id]
       );
 
+
     res.json(
-      refs.rows
+      result.rows
     );
+
   }
 );
+
 
 module.exports = router;
