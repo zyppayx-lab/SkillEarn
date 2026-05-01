@@ -1,6 +1,6 @@
 // business.js
-// FINAL PRODUCTION VERSION
-// Country + OTP + Admin Approval + Escrow + Auto Payout
+// FINAL PRODUCTION VERSION (HARDENED)
+// OTP + Admin Approval + Escrow Lock + Atomic Payments + Security Fixes
 
 console.log("🔥 BUSINESS ROUTES LOADED");
 
@@ -32,13 +32,6 @@ function businessOnly(req, res, next) {
   }
   next();
 }
-
-/* ==========================================
-PING (TEST)
-========================================== */
-router.get("/api/business/ping", (req, res) => {
-  res.json({ ok: true, service: "business" });
-});
 
 /* ==========================================
 SEND OTP
@@ -74,9 +67,7 @@ router.post("/api/business/register", async (req, res) => {
     );
 
     if (exists.rows.length > 0) {
-      return res.status(400).json({
-        message: "Email already exists"
-      });
+      return res.status(400).json({ message: "Email already exists" });
     }
 
     const hash = await bcrypt.hash(password, 10);
@@ -86,7 +77,7 @@ router.post("/api/business/register", async (req, res) => {
       `INSERT INTO vendors
       (business_name,email,password,country,approved,email_verified,otp_code,otp_expires)
       VALUES($1,$2,$3,$4,false,false,$5,NOW()+INTERVAL '10 minutes')`,
-      [business_name, email, hash, country || "US", otp]
+      [business_name, email, hash, country || "NG", otp]
     );
 
     await sendOTP(email, otp);
@@ -113,9 +104,7 @@ router.post("/api/business/verify-email", async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(400).json({
-        message: "Invalid or expired OTP"
-      });
+      return res.status(400).json({ message: "Invalid or expired OTP" });
     }
 
     await pool.query(
@@ -125,35 +114,7 @@ router.post("/api/business/verify-email", async (req, res) => {
       [email]
     );
 
-    res.json({
-      message: "Email verified. Await admin approval."
-    });
-
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
-});
-
-/* ==========================================
-RESEND OTP
-========================================== */
-router.post("/api/business/resend-otp", async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
-    const { email } = req.body;
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    await pool.query(
-      `UPDATE vendors
-       SET otp_code=$1, otp_expires=NOW()+INTERVAL '10 minutes'
-       WHERE email=$2`,
-      [otp, email]
-    );
-
-    await sendOTP(email, otp);
-
-    res.json({ message: "OTP resent" });
+    res.json({ message: "Email verified. Await admin approval." });
 
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -186,15 +147,11 @@ router.post("/api/business/login", async (req, res) => {
     }
 
     if (!vendor.email_verified) {
-      return res.status(403).json({
-        message: "Verify email first"
-      });
+      return res.status(403).json({ message: "Verify email first" });
     }
 
     if (!vendor.approved) {
-      return res.status(403).json({
-        message: "Await admin approval"
-      });
+      return res.status(403).json({ message: "Await admin approval" });
     }
 
     const token = jwt.sign(
@@ -213,8 +170,7 @@ router.post("/api/business/login", async (req, res) => {
       token,
       vendor: {
         id: vendor.id,
-        business_name: vendor.business_name,
-        country: vendor.country
+        business_name: vendor.business_name
       }
     });
 
@@ -224,12 +180,13 @@ router.post("/api/business/login", async (req, res) => {
 });
 
 /* ==========================================
-CREATE TASK (ESCROW)
+CREATE TASK (SAFE ESCROW LOCK)
 ========================================== */
 router.post("/api/business/create-task", auth, businessOnly, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
+  const pool = req.app.locals.pool;
+  const client = await pool.connect();
 
+  try {
     const { title, description, reward, total_workers } = req.body;
 
     if (!title || !reward || !total_workers) {
@@ -238,29 +195,25 @@ router.post("/api/business/create-task", auth, businessOnly, async (req, res) =>
 
     const totalBudget = reward * total_workers;
 
-    // CHECK LAST SUCCESS PAYMENT (ESCROW FUND)
-    const payment = await pool.query(
+    await client.query("BEGIN");
+
+    // Lock latest payment row
+    const payment = await client.query(
       `SELECT * FROM payments
        WHERE vendor_id=$1 AND status='SUCCESS'
-       ORDER BY id DESC LIMIT 1`,
+       ORDER BY id DESC LIMIT 1 FOR UPDATE`,
       [req.user.id]
     );
 
     if (payment.rows.length === 0) {
-      return res.status(400).json({
-        message: "Fund escrow first"
-      });
+      throw new Error("Fund escrow first");
     }
 
-    const escrowBalance = Number(payment.rows[0].amount);
-
-    if (escrowBalance < totalBudget) {
-      return res.status(400).json({
-        message: "Insufficient escrow balance"
-      });
+    if (Number(payment.rows[0].amount) < totalBudget) {
+      throw new Error("Insufficient escrow");
     }
 
-    const task = await pool.query(
+    const task = await client.query(
       `INSERT INTO tasks
       (vendor_id,title,description,reward,total_workers,status)
       VALUES($1,$2,$3,$4,$5,'ACTIVE')
@@ -268,12 +221,14 @@ router.post("/api/business/create-task", auth, businessOnly, async (req, res) =>
       [req.user.id, title, description, reward, total_workers]
     );
 
-    await pool.query(
+    await client.query(
       `INSERT INTO escrow
       (vendor_id,task_id,total_amount,remaining_amount,status)
       VALUES($1,$2,$3,$3,'LOCKED')`,
       [req.user.id, task.rows[0].id, totalBudget]
     );
+
+    await client.query("COMMIT");
 
     res.json({
       message: "Task created with escrow locked",
@@ -281,57 +236,68 @@ router.post("/api/business/create-task", auth, businessOnly, async (req, res) =>
     });
 
   } catch (e) {
-    res.status(500).json({ message: e.message });
+    await client.query("ROLLBACK");
+    res.status(400).json({ message: e.message });
+  } finally {
+    client.release();
   }
 });
 
 /* ==========================================
-APPROVE SUBMISSION (AUTO PAY USER)
+APPROVE SUBMISSION (ATOMIC + SECURE)
 ========================================== */
 router.post("/api/business/approve-submission", auth, businessOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const client = await pool.connect();
+
   try {
-    const pool = req.app.locals.pool;
     const { submission_id } = req.body;
 
-    const sub = await pool.query(
-      "SELECT * FROM submissions WHERE id=$1",
+    await client.query("BEGIN");
+
+    const sub = await client.query(
+      `SELECT * FROM submissions WHERE id=$1 FOR UPDATE`,
       [submission_id]
     );
 
     if (sub.rows.length === 0) {
-      return res.status(404).json({ message: "Submission not found" });
+      throw new Error("Submission not found");
     }
 
     const submission = sub.rows[0];
 
-    const task = await pool.query(
-      "SELECT reward FROM tasks WHERE id=$1",
+    if (submission.status === "APPROVED") {
+      throw new Error("Already approved");
+    }
+
+    const task = await client.query(
+      `SELECT reward,vendor_id FROM tasks WHERE id=$1`,
       [submission.task_id]
     );
+
+    if (task.rows[0].vendor_id !== req.user.id) {
+      throw new Error("Unauthorized");
+    }
 
     const reward = Number(task.rows[0].reward);
 
-    const escrow = await pool.query(
-      "SELECT remaining_amount FROM escrow WHERE task_id=$1",
+    const escrow = await client.query(
+      `SELECT * FROM escrow WHERE task_id=$1 FOR UPDATE`,
       [submission.task_id]
     );
 
-    if (escrow.rows.length === 0) {
-      return res.status(400).json({ message: "Escrow missing" });
-    }
-
     if (Number(escrow.rows[0].remaining_amount) < reward) {
-      return res.status(400).json({ message: "Escrow empty" });
+      throw new Error("Escrow empty");
     }
 
     // PAY USER
-    await pool.query(
-      "UPDATE users SET balance=balance+$1 WHERE id=$2",
+    await client.query(
+      `UPDATE users SET balance=balance+$1 WHERE id=$2`,
       [reward, submission.user_id]
     );
 
-    // REDUCE ESCROW
-    await pool.query(
+    // UPDATE ESCROW
+    await client.query(
       `UPDATE escrow
        SET remaining_amount=remaining_amount-$1
        WHERE task_id=$2`,
@@ -339,17 +305,20 @@ router.post("/api/business/approve-submission", auth, businessOnly, async (req, 
     );
 
     // UPDATE SUBMISSION
-    await pool.query(
-      "UPDATE submissions SET status='APPROVED' WHERE id=$1",
+    await client.query(
+      `UPDATE submissions SET status='APPROVED' WHERE id=$1`,
       [submission_id]
     );
 
-    res.json({
-      message: "User paid successfully"
-    });
+    await client.query("COMMIT");
+
+    res.json({ message: "User paid successfully" });
 
   } catch (e) {
-    res.status(500).json({ message: e.message });
+    await client.query("ROLLBACK");
+    res.status(400).json({ message: e.message });
+  } finally {
+    client.release();
   }
 });
 
