@@ -885,38 +885,28 @@ router.get(
   auth,
   async (req, res) => {
 
-    const pool =
-      req.app.locals.pool;
+    const pool = req.app.locals.pool;
 
-
-    const result =
-      await pool.query(
-        `
-        SELECT
-        u.name,
-        r.amount,
-        r.currency,
-        r.status,
-        r.created_at
-        FROM referral_earnings r
-        JOIN users u
-        ON u.id =
-        r.referred_user_id
-        WHERE
-        r.referrer_id=$1
-        ORDER BY
-        r.id DESC
-        `,
-        [req.user.id]
-      );
-
-
-    res.json(
-      result.rows
+    const result = await pool.query(
+      `
+      SELECT
+      u.name,
+      r.amount,
+      r.currency,
+      r.status,
+      r.created_at
+      FROM referral_earnings r
+      JOIN users u
+      ON u.id = r.referred_user_id
+      WHERE r.referrer_id=$1
+      ORDER BY r.id DESC
+      `,
+      [req.user.id]
     );
+
+    res.json(result.rows);
 
   }
 );
-
 
 module.exports = router;
