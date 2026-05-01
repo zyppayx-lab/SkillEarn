@@ -421,7 +421,7 @@ router.post(
     balance: user.balance,
     referral_code: user.referral_code
   }
-});
+);
 
 /* ==========================================
 FORGOT PASSWORD
