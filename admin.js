@@ -62,7 +62,7 @@ router.post("/api/admin/login", async (req, res) => {
 });
 
 /* ==========================================
-DASHBOARD + ANALYTICS
+DASHBOARD + PROFIT ANALYTICS
 ========================================== */
 router.get("/api/admin/dashboard", auth, adminOnly, async (req, res) => {
   try {
@@ -80,23 +80,26 @@ router.get("/api/admin/dashboard", auth, adminOnly, async (req, res) => {
       SELECT COALESCE(SUM(remaining_amount),0) FROM escrow
     `);
 
-    /* 🔥 PROFIT ANALYTICS */
-    const totalPayments = await pool.query(`
+    /* 🔥 REVENUE */
+    const revenue = await pool.query(`
       SELECT COALESCE(SUM(amount),0) FROM payments
     `);
 
-    const totalEscrow = await pool.query(`
+    /* 🔥 ESCROW RESERVED */
+    const escrowReserved = await pool.query(`
       SELECT COALESCE(SUM(escrow_amount),0) FROM payments
     `);
 
-    const totalWithdrawn = await pool.query(`
+    /* 🔥 PAYOUTS */
+    const paidOut = await pool.query(`
       SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='PAID'
     `);
 
+    /* 🔥 PLATFORM PROFIT (REALISTIC) */
     const profit =
-      Number(totalPayments.rows[0].coalesce) -
-      Number(totalEscrow.rows[0].coalesce) -
-      Number(totalWithdrawn.rows[0].coalesce);
+      Number(revenue.rows[0].coalesce) -
+      Number(escrowReserved.rows[0].coalesce) -
+      Number(paidOut.rows[0].coalesce);
 
     res.json({
       users: users.rows[0].count,
@@ -105,10 +108,9 @@ router.get("/api/admin/dashboard", auth, adminOnly, async (req, res) => {
       pending_withdrawals: withdrawals.rows[0].count,
       escrow_locked: Number(escrow.rows[0].coalesce),
 
-      /* 🔥 NEW */
-      total_revenue: Number(totalPayments.rows[0].coalesce),
-      total_escrow_reserved: Number(totalEscrow.rows[0].coalesce),
-      total_paid_out: Number(totalWithdrawn.rows[0].coalesce),
+      total_revenue: Number(revenue.rows[0].coalesce),
+      total_escrow_reserved: Number(escrowReserved.rows[0].coalesce),
+      total_paid_out: Number(paidOut.rows[0].coalesce),
       platform_profit: profit
     });
 
@@ -118,7 +120,69 @@ router.get("/api/admin/dashboard", auth, adminOnly, async (req, res) => {
 });
 
 /* ==========================================
-ESCROW RELEASE (SAFE)
+VENDORS MANAGEMENT
+========================================== */
+router.get("/api/admin/vendors", auth, adminOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const result = await pool.query(`
+    SELECT id, business_name, email, approved, email_verified, created_at
+    FROM vendors ORDER BY id DESC
+  `);
+
+  res.json(result.rows);
+});
+
+router.post("/api/admin/vendor/approve", auth, adminOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  await pool.query(
+    "UPDATE vendors SET approved=true WHERE id=$1",
+    [req.body.vendor_id]
+  );
+
+  res.json({ message: "Vendor approved" });
+});
+
+router.post("/api/admin/vendor/block", auth, adminOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  await pool.query(
+    "UPDATE vendors SET approved=false WHERE id=$1",
+    [req.body.vendor_id]
+  );
+
+  res.json({ message: "Vendor blocked" });
+});
+
+/* ==========================================
+PAYMENTS VIEW
+========================================== */
+router.get("/api/admin/payments", auth, adminOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const result = await pool.query(`
+    SELECT * FROM payments ORDER BY id DESC
+  `);
+
+  res.json(result.rows);
+});
+
+/* ==========================================
+REFERRAL ANALYTICS
+========================================== */
+router.get("/api/admin/referrals", auth, adminOnly, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const result = await pool.query(`
+    SELECT * FROM referrals ORDER BY id DESC
+  `);
+
+  res.json(result.rows);
+});
+
+/* ==========================================
+ESCROW RELEASE (SAFE TRANSACTION)
 ========================================== */
 router.post("/api/admin/escrow/release", auth, adminOnly, async (req, res) => {
   const pool = req.app.locals.pool;
@@ -150,9 +214,7 @@ router.post("/api/admin/escrow/release", auth, adminOnly, async (req, res) => {
       SELECT remaining_amount FROM escrow WHERE task_id=$1 FOR UPDATE
     `, [row.task_id]);
 
-    const remaining = Number(esc.rows[0]?.remaining_amount || 0);
-
-    if (remaining < row.reward) {
+    if (Number(esc.rows[0].remaining_amount) < row.reward) {
       await client.query("ROLLBACK");
       return res.status(400).json({ message: "Insufficient escrow" });
     }
@@ -187,7 +249,7 @@ router.post("/api/admin/escrow/release", auth, adminOnly, async (req, res) => {
 });
 
 /* ==========================================
-WITHDRAW APPROVE (SAFE)
+WITHDRAW APPROVE (MANUAL)
 ========================================== */
 router.post("/api/admin/withdraw/approve", auth, adminOnly, async (req, res) => {
   const pool = req.app.locals.pool;
@@ -239,9 +301,10 @@ WITHDRAW REJECT
 router.post("/api/admin/withdraw/reject", auth, adminOnly, async (req, res) => {
   const pool = req.app.locals.pool;
 
-  const w = await pool.query(`
-    SELECT * FROM withdrawals WHERE id=$1
-  `, [req.body.withdrawal_id]);
+  const w = await pool.query(
+    "SELECT * FROM withdrawals WHERE id=$1",
+    [req.body.withdrawal_id]
+  );
 
   if (!w.rows.length) {
     return res.status(404).json({ message: "Not found" });
@@ -249,23 +312,21 @@ router.post("/api/admin/withdraw/reject", auth, adminOnly, async (req, res) => {
 
   const row = w.rows[0];
 
-  if (row.status === "REJECTED") {
-    return res.json({ message: "Already rejected" });
-  }
+  await pool.query(
+    "UPDATE withdrawals SET status='REJECTED' WHERE id=$1",
+    [row.id]
+  );
 
-  await pool.query(`
-    UPDATE withdrawals SET status='REJECTED' WHERE id=$1
-  `, [row.id]);
-
-  await pool.query(`
-    UPDATE users SET balance=balance+$1 WHERE id=$2
-  `, [row.amount, row.user_id]);
+  await pool.query(
+    "UPDATE users SET balance=balance+$1 WHERE id=$2",
+    [row.amount, row.user_id]
+  );
 
   res.json({ message: "Rejected & refunded" });
 });
 
 /* ==========================================
-USERS
+USERS LIST
 ========================================== */
 router.get("/api/admin/users", auth, adminOnly, async (req, res) => {
   const pool = req.app.locals.pool;
