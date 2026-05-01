@@ -414,14 +414,14 @@ router.post(
 
   user: {
     id: user.id,
-    name: user.name,
     email: user.email,
-    role: user.role,
+    name: user.name,
     country: user.country,
     balance: user.balance,
     referral_code: user.referral_code
   }
-);
+});
+  
 
 /* ==========================================
 FORGOT PASSWORD
