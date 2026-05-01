@@ -1,5 +1,5 @@
 // payments-webhook.js
-// FINAL PRODUCTION VERSION (STABLE + SAFE + NO DB ERRORS)
+// FINAL PRODUCTION VERSION (CLEAN + SAFE + CORRECT LOGIC)
 
 const express = require("express");
 const crypto = require("crypto");
@@ -138,9 +138,13 @@ router.post(
       const amount = Number(data.price_amount) || 0;
 
       /* ✅ CHECK VENDOR EXISTS */
-      const vendorExists = await ensureVendor(pool, vendorId);
-      if (!vendorExists) {
-        console.log("❌ Vendor missing, skipping job:", vendorId);
+      const vendorCheck = await pool.query(
+        "SELECT id FROM vendors WHERE id=$1",
+        [vendorId]
+      );
+
+      if (vendorCheck.rows.length === 0) {
+        console.log("❌ Vendor does not exist:", vendorId);
         return res.end();
       }
 
@@ -212,9 +216,13 @@ async function processPaystackPayment(data, req) {
   const description = meta.description || "";
 
   /* ✅ CHECK VENDOR EXISTS */
-  const vendorExists = await ensureVendor(pool, vendorId);
-  if (!vendorExists) {
-    console.log("❌ Vendor missing, skipping job:", vendorId);
+  const vendorCheck = await pool.query(
+    "SELECT id FROM vendors WHERE id=$1",
+    [vendorId]
+  );
+
+  if (vendorCheck.rows.length === 0) {
+    console.log("❌ Vendor does not exist:", vendorId);
     return;
   }
 
@@ -249,20 +257,6 @@ async function processPaystackPayment(data, req) {
   });
 
   console.log("✅ Job created:", reference);
-}
-
-/* ==========================================
-   CHECK VENDOR EXISTS (SAFE)
-========================================== */
-async function ensureVendor(pool, vendorId) {
-  if (!vendorId) return false;
-
-  const result = await pool.query(
-    "SELECT id FROM vendors WHERE id=$1",
-    [vendorId]
-  );
-
-  return result.rows.length > 0;
 }
 
 /* ==========================================
