@@ -1,15 +1,11 @@
 // business.js
 // FINAL PRODUCTION VERSION
-// OTP + ADMIN APPROVAL + FORGOT PASSWORD +
-// ESCROW + ATOMIC PAYMENTS +
-// COUNTRY-AWARE BUSINESS LOGIC
 
 console.log("🔥 BUSINESS ROUTES LOADED");
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
 const { Resend } = require("resend");
 
 const router = express.Router();
@@ -160,9 +156,6 @@ async function sendEmail(
 }
 
 
-/* ==========================================
-OTP
-========================================== */
 async function sendOTP(
     email,
     otp
@@ -561,7 +554,7 @@ async(req,res)=>{
 
 
 /* ==========================================
-FORGOT PASSWORD (OTP ONLY)
+FORGOT PASSWORD
 ========================================== */
 router.post(
 "/api/business/forgot-password",
@@ -591,9 +584,6 @@ async(req,res)=>{
         );
 
 
-        /*
-        Do not reveal account existence
-        */
         if(
             !result.rows.length
         ){
@@ -645,7 +635,6 @@ async(req,res)=>{
             <h2>SkillEarn</h2>
             <p>Password reset code:</p>
             <h1>${otp}</h1>
-            <p>Expires in 10 mins</p>
             `
 
         );
@@ -672,7 +661,7 @@ async(req,res)=>{
 
 
 /* ==========================================
-RESET PASSWORD (OTP ONLY)
+RESET PASSWORD
 ========================================== */
 router.post(
 "/api/business/reset-password",
@@ -782,7 +771,7 @@ async(req,res)=>{
 
 
 /* ==========================================
-PRICING API
+PRICING
 ========================================== */
 router.get(
 "/api/business/pricing",
@@ -836,6 +825,8 @@ async(req,res)=>{
     });
 
 });
+
+
 /* ==========================================
 CREATE CAMPAIGN
 ========================================== */
@@ -859,6 +850,7 @@ async(req,res)=>{
 
         if(
             !purpose ||
+            !category ||
             !title
         ){
 
@@ -871,19 +863,60 @@ async(req,res)=>{
         }
 
 
+        if(
+            purpose === "social" &&
+            !link
+        ){
+
+            return res
+            .status(400)
+            .json({
+                message:
+                "Campaign link required"
+            });
+
+        }
+
+
+        const workers =
+        Number(
+            qty || 1
+        );
+
+
+        if(
+            workers < 1
+        ){
+
+            return res
+            .status(400)
+            .json({
+                message:
+                "Invalid quantity"
+            });
+
+        }
+
+
         res.json({
 
             message:
             "Proceed to payment",
 
-            campaign:{
+            payment_payload:{
 
                 purpose,
                 category,
                 title,
-                description,
-                link,
-                qty:qty || 1
+
+                description:
+                description || "",
+
+                link:
+                link || "",
+
+                qty:
+                workers
 
             }
 
@@ -901,6 +934,7 @@ async(req,res)=>{
     }
 
 });
+
 
 /* ==========================================
 APPROVE SUBMISSION
@@ -955,6 +989,18 @@ async(req,res)=>{
 
         const submission =
         sub.rows[0];
+
+
+        if(
+            submission.status ===
+            "APPROVED"
+        ){
+
+            throw new Error(
+                "Already approved"
+            );
+
+        }
 
 
         const task =
