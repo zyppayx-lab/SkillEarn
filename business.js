@@ -836,9 +836,8 @@ async(req,res)=>{
     });
 
 });
-
 /* ==========================================
-CREATE CAMPAIGN (PAY FIRST)
+CREATE CAMPAIGN
 ========================================== */
 router.post(
 "/api/business/create-campaign",
@@ -872,25 +871,19 @@ async(req,res)=>{
         }
 
 
-        /*
-        Save draft in frontend.
-        Payment route creates live campaign.
-        */
-
         res.json({
 
             message:
             "Proceed to payment",
 
-            payment_data:{
+            campaign:{
 
                 purpose,
                 category,
-                qty:qty || 1,
-
                 title,
                 description,
-                link
+                link,
+                qty:qty || 1
 
             }
 
