@@ -8,9 +8,6 @@ const router =
 express.Router();
 
 
-/* ==========================================
-PAYSTACK WEBHOOK
-========================================== */
 router.post(
 
 "/paystack",
@@ -25,24 +22,15 @@ async(req,res)=>{
 
     try{
 
-        const secret =
-        process.env
-        .PAYSTACK_SECRET_KEY;
-
-
-        const signature =
-        req.headers[
-            "x-paystack-signature"
-        ];
-
-
         const hash =
         crypto
 
         .createHmac(
 
             "sha512",
-            secret
+
+            process.env
+            .PAYSTACK_SECRET_KEY
 
         )
 
@@ -56,7 +44,13 @@ async(req,res)=>{
 
 
         if(
-            hash !== signature
+
+            hash !==
+
+            req.headers[
+                "x-paystack-signature"
+            ]
+
         ){
 
             return res
@@ -85,10 +79,17 @@ async(req,res)=>{
         }
 
 
-        await processPaystack(
+        await processPayment(
+
+            req.app
+            .locals
+            .pool,
 
             event.data,
-            req
+
+            event.data.metadata,
+
+            "paystack"
 
         );
 
@@ -109,109 +110,6 @@ async(req,res)=>{
 });
 
 
-/* ==========================================
-PAYSTACK VERIFY
-========================================== */
-router.post(
-
-"/paystack/verify",
-
-express.json(),
-
-async(req,res)=>{
-
-    try{
-
-        const reference =
-        req.body.reference;
-
-
-        const verify =
-        await fetch(
-
-            `https://api.paystack.co/transaction/verify/${reference}`,
-
-            {
-
-                headers:{
-
-                    Authorization:
-
-                    "Bearer " +
-
-                    process.env
-                    .PAYSTACK_SECRET_KEY
-
-                }
-
-            }
-
-        );
-
-
-        const data =
-        await verify
-        .json();
-
-
-        if(
-
-            !data.status ||
-
-            data.data.status !==
-            "success"
-
-        ){
-
-            return res
-            .status(400)
-            .json({
-
-                message:
-                "Verification failed"
-
-            });
-
-        }
-
-
-        await processPaystack(
-
-            data.data,
-            req
-
-        );
-
-
-        res.json({
-
-            message:
-            "Payment verified"
-
-        });
-
-
-    }catch(err){
-
-        console.error(err);
-
-        res
-        .status(500)
-        .json({
-
-            message:
-            "Failed"
-
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-CRYPTO WEBHOOK
-========================================== */
 router.post(
 
 "/crypto",
@@ -222,17 +120,10 @@ async(req,res)=>{
 
     try{
 
-        const pool =
-        req.app.locals.pool;
-
-
-        const body =
-        req.body;
-
-
         if(
 
-            body.payment_status !==
+            req.body
+            .payment_status !==
             "finished"
 
         ){
@@ -242,114 +133,38 @@ async(req,res)=>{
         }
 
 
-        const reference =
-        body.order_id;
-
-
-        const duplicate =
-        await pool.query(
-
-            `
-            SELECT id
-            FROM payments
-            WHERE reference=$1
-            `,
-
-            [reference]
-
-        );
-
-
-        if(
-            duplicate.rows.length
-        ){
-
-            return res.end();
-
-        }
-
-
         const meta =
+        JSON.parse(
 
-        (
-            body
-            .order_description || ""
-        )
+            req.body
+            .order_description
 
-        .split("|");
-
-
-        const purpose =
-        meta[0];
-
-
-        const category =
-        meta[1];
-
-
-        const vendorId =
-        Number(
-            meta[2]
         );
 
 
-        const title =
-        meta[3];
+        await processPayment(
 
-
-        const description =
-        meta[4];
-
-
-        const amount =
-        Number(
-            body
-            .price_amount
-        );
-
-
-        await savePayment(
-
-            pool,
+            req.app
+            .locals
+            .pool,
 
             {
 
-                vendorId,
+                reference:
 
-                purpose,
+                req.body
+                .order_id,
 
-                amount,
+                amount:
 
-                reference,
+                req.body
+                .price_amount
 
-                method:"crypto"
+            },
 
-            }
+            meta,
 
-        );
-
-
-        await createJob(
-
-            pool,
-
-            purpose,
-
-            {
-
-                vendor_id:
-                vendorId,
-
-                category,
-
-                title,
-
-                description,
-
-                payment_ref:
-                reference
-
-            }
+            "crypto"
 
         );
 
@@ -370,21 +185,12 @@ async(req,res)=>{
 });
 
 
-/* ==========================================
-PAYSTACK PROCESS
-========================================== */
-async function processPaystack(
-    data,
-    req
+async function processPayment(
+    pool,
+    payment,
+    meta,
+    method
 ){
-
-    const pool =
-    req.app.locals.pool;
-
-
-    const reference =
-    data.reference;
-
 
     const duplicate =
     await pool.query(
@@ -395,110 +201,10 @@ async function processPaystack(
         WHERE reference=$1
         `,
 
-        [reference]
-
-    );
-
-
-    if(
-        duplicate.rows.length
-    ){
-
-        return;
-
-    }
-
-
-    const meta =
-    data.metadata || {};
-
-
-    const vendorId =
-    Number(
-        meta.vendor_id
-    );
-
-
-    const amount =
-    Number(
-        data.amount
-    ) / 100;
-
-
-    await savePayment(
-
-        pool,
-
-        {
-
-            vendorId,
-
-            purpose:
-            meta.purpose,
-
-            amount,
-
-            reference,
-
-            method:
-            "paystack"
-
-        }
-
-    );
-
-
-    await createJob(
-
-        pool,
-
-        meta.purpose,
-
-        {
-
-            vendor_id:
-            vendorId,
-
-            category:
-            meta.category,
-
-            title:
-            meta.title,
-
-            description:
-            meta.description,
-
-            payment_ref:
-            reference
-
-        }
-
-    );
-
-}
-
-
-/* ==========================================
-SAVE PAYMENT
-========================================== */
-async function savePayment(
-    pool,
-    data
-){
-
-    const vendor =
-    await pool.query(
-
-        `
-        SELECT id
-        FROM vendors
-        WHERE id=$1
-        `,
-
         [
 
-            data
-            .vendorId
+            payment
+            .reference
 
         ]
 
@@ -506,22 +212,32 @@ async function savePayment(
 
 
     if(
-        !vendor.rows.length
+        duplicate.rows.length
     ){
-
-        throw new Error(
-            "Vendor not found"
-        );
-
+        return;
     }
 
 
+    const amount =
+
+    method ===
+    "paystack"
+
+    ?
+
+    Number(
+        payment.amount
+    ) / 100
+
+    :
+
+    Number(
+        payment.amount
+    );
+
+
     const escrow =
-    data.amount * 0.1;
-
-
-    const released =
-    data.amount - escrow;
+    amount * 0.1;
 
 
     await pool.query(
@@ -549,39 +265,96 @@ async function savePayment(
 
         [
 
-            data.vendorId,
+            meta.vendor_id,
 
-            data.amount,
+            amount,
 
             escrow,
 
-            released,
+            amount-escrow,
 
-            data.method,
+            method,
 
-            data.purpose,
+            meta.purpose,
 
-            data.reference
+            payment.reference
 
         ]
 
     );
 
+
+    await createCampaign(
+        pool,
+        meta,
+        payment.reference
+    );
+
 }
 
 
-/* ==========================================
-CREATE JOBS
-========================================== */
-async function createJob(
+async function createCampaign(
     pool,
-    purpose,
-    data
+    meta,
+    paymentRef
 ){
 
-    /* TASK */
     if(
-        purpose === "task"
+        meta.purpose ===
+        "social"
+    ){
+
+        await pool.query(
+
+            `
+            INSERT INTO social_tasks
+            (
+                vendor_id,
+                platform,
+                action,
+                title,
+                description,
+                campaign_link,
+                reward,
+                paid,
+                payment_reference,
+                status
+            )
+
+            VALUES
+            (
+                $1,$2,$3,$4,$5,
+                50,true,$6,
+                'ACTIVE'
+            )
+            `,
+
+            [
+
+                meta.vendor_id,
+
+                meta.platform,
+
+                meta.category,
+
+                meta.title,
+
+                meta.description,
+
+                meta.link,
+
+                paymentRef
+
+            ]
+
+        );
+
+    }
+
+
+    if(
+        meta.purpose ===
+        "task"
     ){
 
         await pool.query(
@@ -601,214 +374,20 @@ async function createJob(
             VALUES
             (
                 $1,$2,$3,
-                50,
-                true,
-                $4,
+                50,true,$4,
                 'ACTIVE'
             )
             `,
 
             [
 
-                data.vendor_id,
+                meta.vendor_id,
 
-                data.title,
+                meta.title,
 
-                data.description,
+                meta.description,
 
-                data.payment_ref
-
-            ]
-
-        );
-
-    }
-
-
-    /* SOCIAL */
-    if(
-        purpose === "social"
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO social_tasks
-            (
-                vendor_id,
-                platform,
-                action,
-                title,
-                description,
-                reward,
-                paid,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,
-                'instagram',
-                $2,
-                $3,
-                $4,
-                50,
-                true,
-                $5,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                data.vendor_id,
-
-                data.category,
-
-                data.title,
-
-                data.description,
-
-                data.payment_ref
-
-            ]
-
-        );
-
-    }
-
-
-    /* FREELANCE */
-    if(
-        purpose === "freelance"
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO freelance_jobs
-            (
-                vendor_id,
-                title,
-                description,
-                budget,
-                paid,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,$2,$3,
-                0,
-                true,
-                $4,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                data.vendor_id,
-
-                data.title,
-
-                data.description,
-
-                data.payment_ref
-
-            ]
-
-        );
-
-    }
-
-
-    /* HIRING */
-    if(
-        purpose === "hiring"
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO hiring_jobs
-            (
-                vendor_id,
-                title,
-                description,
-                salary,
-                paid,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,$2,$3,
-                'Negotiable',
-                true,
-                $4,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                data.vendor_id,
-
-                data.title,
-
-                data.description,
-
-                data.payment_ref
-
-            ]
-
-        );
-
-    }
-
-
-    /* INFLUENCER */
-    if(
-        purpose === "influencer"
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO influencer_jobs
-            (
-                vendor_id,
-                title,
-                description,
-                budget,
-                paid,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,$2,$3,
-                0,
-                true,
-                $4,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                data.vendor_id,
-
-                data.title,
-
-                data.description,
-
-                data.payment_ref
+                paymentRef
 
             ]
 
