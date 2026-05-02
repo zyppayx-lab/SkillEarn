@@ -561,7 +561,7 @@ async(req,res)=>{
 
 
 /* ==========================================
-FORGOT PASSWORD
+FORGOT PASSWORD (OTP ONLY)
 ========================================== */
 router.post(
 "/api/business/forgot-password",
@@ -591,22 +591,27 @@ async(req,res)=>{
         );
 
 
+        /*
+        Do not reveal account existence
+        */
         if(
             !result.rows.length
         ){
 
             return res.json({
-                message:
-                "Reset link sent"
+                message:"OTP sent"
             });
 
         }
 
 
-        const token =
-        crypto
-        .randomBytes(32)
-        .toString("hex");
+        const otp =
+        Math.floor(
+            100000 +
+            Math.random()*900000
+        ).toString();
+
+
 
 
         await pool.query(
@@ -614,18 +619,20 @@ async(req,res)=>{
             `
             UPDATE vendors
             SET
-            reset_token=$1,
-            reset_expires=
-            NOW()+INTERVAL '30 minutes'
+            reset_otp=$1,
+            reset_otp_expires=
+            NOW()+INTERVAL '10 minutes'
             WHERE email=$2
             `,
 
             [
-                token,
+                otp,
                 email
             ]
 
         );
+
+
 
 
         await sendEmail(
@@ -636,16 +643,18 @@ async(req,res)=>{
 
             `
             <h2>SkillEarn</h2>
-            <p>Your reset token:</p>
-            <h1>${token}</h1>
+            <p>Password reset code:</p>
+            <h1>${otp}</h1>
+            <p>Expires in 10 mins</p>
             `
 
         );
 
 
+
+
         res.json({
-            message:
-            "Reset link sent"
+            message:"OTP sent"
         });
 
 
@@ -662,6 +671,9 @@ async(req,res)=>{
 });
 
 
+/* ==========================================
+RESET PASSWORD (OTP ONLY)
+========================================== */
 router.post(
 "/api/business/reset-password",
 async(req,res)=>{
@@ -672,9 +684,12 @@ async(req,res)=>{
         req.app.locals.pool;
 
         const {
-            token,
+            email,
+            otp,
             password
         } = req.body;
+
+
 
 
         const result =
@@ -684,13 +699,19 @@ async(req,res)=>{
             SELECT id
             FROM vendors
             WHERE
-            reset_token=$1
-            AND reset_expires > NOW()
+            email=$1
+            AND reset_otp=$2
+            AND reset_otp_expires > NOW()
             `,
 
-            [token]
+            [
+                email,
+                otp
+            ]
 
         );
+
+
 
 
         if(
@@ -701,10 +722,12 @@ async(req,res)=>{
             .status(400)
             .json({
                 message:
-                "Invalid token"
+                "Invalid or expired OTP"
             });
 
         }
+
+
 
 
         const hash =
@@ -714,28 +737,34 @@ async(req,res)=>{
         );
 
 
+
+
         await pool.query(
 
             `
             UPDATE vendors
             SET
             password=$1,
-            reset_token=NULL,
-            reset_expires=NULL
-            WHERE reset_token=$2
+            reset_otp=NULL,
+            reset_otp_expires=NULL
+            WHERE email=$2
             `,
 
             [
                 hash,
-                token
+                email
             ]
 
         );
 
 
+
+
         res.json({
+
             message:
             "Password updated"
+
         });
 
 
