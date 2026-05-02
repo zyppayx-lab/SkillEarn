@@ -837,6 +837,77 @@ async(req,res)=>{
 
 });
 
+/* ==========================================
+CREATE CAMPAIGN (PAY FIRST)
+========================================== */
+router.post(
+"/api/business/create-campaign",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const {
+            purpose,
+            category,
+            title,
+            description,
+            link,
+            qty
+        } = req.body;
+
+
+        if(
+            !purpose ||
+            !title
+        ){
+
+            return res
+            .status(400)
+            .json({
+                message:"Missing fields"
+            });
+
+        }
+
+
+        /*
+        Save draft in frontend.
+        Payment route creates live campaign.
+        */
+
+        res.json({
+
+            message:
+            "Proceed to payment",
+
+            payment_data:{
+
+                purpose,
+                category,
+                qty:qty || 1,
+
+                title,
+                description,
+                link
+
+            }
+
+        });
+
+
+    }catch(err){
+
+        res
+        .status(500)
+        .json({
+            message:err.message
+        });
+
+    }
+
+});
 
 /* ==========================================
 APPROVE SUBMISSION
