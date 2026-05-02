@@ -520,24 +520,27 @@ async(req,res)=>{
 
         res.json({
 
-            message:
-            "Login successful",
+    message:
+    "Login successful",
 
-            token,
+    token,
 
-            vendor:{
+    vendor:{
 
-                id:vendor.id,
+        id:vendor.id,
 
-                business_name:
-                vendor.business_name,
+        business_name:
+        vendor.business_name,
 
-                country:
-                vendor.country
+        email:
+        vendor.email,
 
-            }
+        country:
+        vendor.country
 
-        });
+    }
+
+});
 
 
     }catch(err){
