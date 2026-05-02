@@ -1,6 +1,5 @@
 // payments.js
 // FINAL PRODUCTION VERSION
-// PAYSTACK + CRYPTO + COUNTRY PRICING
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -13,8 +12,7 @@ try{
     fetchFn = require("node-fetch");
 }
 
-const router =
-express.Router();
+const router = express.Router();
 
 
 /* ==========================================
@@ -49,11 +47,7 @@ function auth(req,res,next){
 }
 
 
-function businessOnly(
-    req,
-    res,
-    next
-){
+function businessOnly(req,res,next){
 
     if(
         req.user.role !== "vendor" &&
@@ -77,9 +71,7 @@ function businessOnly(
 HELPERS
 ========================================== */
 function isNigeria(country){
-
     return country === "NG";
-
 }
 
 
@@ -107,7 +99,7 @@ function usdToNgn(usd){
 PRICING
 ========================================== */
 function calcPrice(
-    vendorCountry,
+    country,
     purpose,
     category,
     qty
@@ -117,24 +109,18 @@ function calcPrice(
     Number(qty) || 1;
 
 
-    /* SOCIAL */
     if(
+        purpose === "task" ||
         purpose === "social"
     ){
 
         if(
-            isNigeria(
-                vendorCountry
-            )
+            isNigeria(country)
         ){
 
             return {
-
                 currency:"NGN",
-
-                amount:
-                qty * 50
-
+                amount:qty * 50
             };
 
         }
@@ -145,11 +131,8 @@ function calcPrice(
             currency:"USD",
 
             amount:Number(
-
-                (
-                    qty * 0.036
-                ).toFixed(3)
-
+                (qty * 0.036)
+                .toFixed(3)
             )
 
         };
@@ -157,23 +140,17 @@ function calcPrice(
     }
 
 
-    /* HIRING */
     if(
         purpose === "hiring"
     ){
 
         if(
-            isNigeria(
-                vendorCountry
-            )
+            isNigeria(country)
         ){
 
             return {
-
                 currency:"NGN",
-
                 amount:2000
-
             };
 
         }
@@ -184,16 +161,13 @@ function calcPrice(
             currency:"USD",
 
             amount:
-            ngnToUsd(
-                2000
-            )
+            ngnToUsd(2000)
 
         };
 
     }
 
 
-    /* FREELANCE */
     if(
         purpose === "freelance"
     ){
@@ -206,16 +180,12 @@ function calcPrice(
             amount < 4 ||
             amount > 100
         ){
-
             return null;
-
         }
 
 
         if(
-            isNigeria(
-                vendorCountry
-            )
+            isNigeria(country)
         ){
 
             return {
@@ -223,9 +193,7 @@ function calcPrice(
                 currency:"NGN",
 
                 amount:
-                usdToNgn(
-                    amount
-                )
+                usdToNgn(amount)
 
             };
 
@@ -233,17 +201,13 @@ function calcPrice(
 
 
         return {
-
             currency:"USD",
-
             amount
-
         };
 
     }
 
 
-    /* INFLUENCER */
     if(
         purpose === "influencer"
     ){
@@ -256,16 +220,12 @@ function calcPrice(
             amount < 10 ||
             amount > 50
         ){
-
             return null;
-
         }
 
 
         if(
-            isNigeria(
-                vendorCountry
-            )
+            isNigeria(country)
         ){
 
             return {
@@ -273,9 +233,7 @@ function calcPrice(
                 currency:"NGN",
 
                 amount:
-                usdToNgn(
-                    amount
-                )
+                usdToNgn(amount)
 
             };
 
@@ -283,51 +241,8 @@ function calcPrice(
 
 
         return {
-
             currency:"USD",
-
             amount
-
-        };
-
-    }
-
-
-    /* TASK */
-    if(
-        purpose === "task"
-    ){
-
-        if(
-            isNigeria(
-                vendorCountry
-            )
-        ){
-
-            return {
-
-                currency:"NGN",
-
-                amount:
-                qty * 50
-
-            };
-
-        }
-
-
-        return {
-
-            currency:"USD",
-
-            amount:Number(
-
-                (
-                    qty * 0.036
-                ).toFixed(3)
-
-            )
-
         };
 
     }
@@ -339,15 +254,13 @@ function calcPrice(
 
 
 /* ==========================================
-PAYSTACK
+PAYSTACK INIT
 ========================================== */
 async function initPaystack(
-
     email,
     amount,
     ref,
-    meta
-
+    metadata
 ){
 
     const response =
@@ -364,6 +277,7 @@ async function initPaystack(
                 Authorization:
 
                 "Bearer " +
+
                 process.env
                 .PAYSTACK_SECRET_KEY,
 
@@ -383,8 +297,7 @@ async function initPaystack(
                 reference:
                 ref,
 
-                metadata:
-                meta
+                metadata
 
             })
 
@@ -400,7 +313,7 @@ async function initPaystack(
 
 
 /* ==========================================
-PAYSTACK PAYMENT
+PAYSTACK
 ========================================== */
 router.post(
 "/api/paystack/create-payment",
@@ -419,23 +332,11 @@ async(req,res)=>{
             return res
             .status(400)
             .json({
-
                 message:
-                "Use crypto payment"
-
+                "Use crypto"
             });
 
         }
-
-
-        const {
-
-            email,
-            purpose,
-            category,
-            qty
-
-        } = req.body;
 
 
         const pricing =
@@ -443,11 +344,11 @@ async(req,res)=>{
 
             req.user.country,
 
-            purpose,
+            req.body.purpose,
 
-            category,
+            req.body.category,
 
-            qty
+            req.body.qty
 
         );
 
@@ -457,10 +358,8 @@ async(req,res)=>{
             return res
             .status(400)
             .json({
-
                 message:
                 "Invalid pricing"
-
             });
 
         }
@@ -476,20 +375,26 @@ async(req,res)=>{
             vendor_id:
             req.user.id,
 
-            purpose,
+            purpose:
+            req.body.purpose,
 
-            category,
+            category:
+            req.body.category,
 
-            qty,
-
-            country:
-            req.user.country,
+            qty:
+            req.body.qty,
 
             title:
-            `${purpose} campaign`,
+            req.body.title,
 
             description:
-            `${category} job`
+            req.body.description,
+
+            link:
+            req.body.link,
+
+            platform:
+            req.body.platform
 
         };
 
@@ -497,7 +402,7 @@ async(req,res)=>{
         const data =
         await initPaystack(
 
-            email,
+            req.body.email,
 
             pricing.amount,
 
@@ -508,32 +413,16 @@ async(req,res)=>{
         );
 
 
-        if(
-            !data.status
-        ){
-
-            return res
-            .status(400)
-            .json({
-
-                message:
-                "Payment init failed"
-
-            });
-
-        }
-
-
         res.json({
+
+            reference:
+            ref,
 
             currency:
             pricing.currency,
 
             amount:
             pricing.amount,
-
-            reference:
-            ref,
 
             payment_url:
 
@@ -550,10 +439,8 @@ async(req,res)=>{
         res
         .status(500)
         .json({
-
             message:
             "Payment failed"
-
         });
 
     }
@@ -581,23 +468,11 @@ async(req,res)=>{
             return res
             .status(400)
             .json({
-
                 message:
                 "Use Paystack"
-
             });
 
         }
-
-
-        const {
-
-            purpose,
-            category,
-            qty,
-            pay_currency
-
-        } = req.body;
 
 
         const pricing =
@@ -605,27 +480,13 @@ async(req,res)=>{
 
             req.user.country,
 
-            purpose,
+            req.body.purpose,
 
-            category,
+            req.body.category,
 
-            qty
+            req.body.qty
 
         );
-
-
-        if(!pricing){
-
-            return res
-            .status(400)
-            .json({
-
-                message:
-                "Invalid pricing"
-
-            });
-
-        }
 
 
         const ref =
@@ -665,7 +526,8 @@ async(req,res)=>{
 
                     pay_currency:
 
-                    pay_currency ||
+                    req.body
+                    .pay_currency ||
 
                     "usdttrc20",
 
@@ -674,15 +536,33 @@ async(req,res)=>{
 
                     order_description:
 
-                    `${purpose}|`+
+                    JSON.stringify({
 
-                    `${category}|`+
+                        vendor_id:
+                        req.user.id,
 
-                    `${req.user.id}|`+
+                        purpose:
+                        req.body.purpose,
 
-                    `${purpose} campaign|`+
+                        category:
+                        req.body.category,
 
-                    `${category} job`
+                        qty:
+                        req.body.qty,
+
+                        title:
+                        req.body.title,
+
+                        description:
+                        req.body.description,
+
+                        link:
+                        req.body.link,
+
+                        platform:
+                        req.body.platform
+
+                    })
 
                 })
 
@@ -692,20 +572,19 @@ async(req,res)=>{
 
 
         const data =
-        await response
-        .json();
+        await response.json();
 
 
         res.json({
+
+            reference:
+            ref,
 
             currency:
             pricing.currency,
 
             amount:
             pricing.amount,
-
-            reference:
-            ref,
 
             ...data
 
@@ -719,10 +598,8 @@ async(req,res)=>{
         res
         .status(500)
         .json({
-
             message:
-            "Crypto payment failed"
-
+            "Crypto failed"
         });
 
     }
