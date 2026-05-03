@@ -8,6 +8,7 @@ const router =
 express.Router();
 
 
+
 /* ==========================================
 PAYSTACK WEBHOOK
 ========================================== */
@@ -26,6 +27,7 @@ async(req,res)=>{
     try{
 
         const hash =
+
         crypto
 
         .createHmac(
@@ -46,6 +48,7 @@ async(req,res)=>{
         );
 
 
+
         if(
 
             hash !==
@@ -63,7 +66,9 @@ async(req,res)=>{
         }
 
 
+
         const event =
+
         JSON.parse(
 
             req.body
@@ -72,14 +77,18 @@ async(req,res)=>{
         );
 
 
+
         if(
+
             event.event !==
             "charge.success"
+
         ){
 
             return res.end();
 
         }
+
 
 
         await processPayment(
@@ -97,12 +106,16 @@ async(req,res)=>{
         );
 
 
+
         res.end();
+
 
 
     }catch(err){
 
-        console.error(err);
+        console.error(
+            err
+        );
 
         res
         .status(500)
@@ -111,6 +124,8 @@ async(req,res)=>{
     }
 
 });
+
+
 
 
 /* ==========================================
@@ -139,13 +154,16 @@ async(req,res)=>{
         }
 
 
+
         const meta =
+
         JSON.parse(
 
             req.body
             .order_description
 
         );
+
 
 
         await processPayment(
@@ -175,12 +193,16 @@ async(req,res)=>{
         );
 
 
+
         res.end();
+
 
 
     }catch(err){
 
-        console.error(err);
+        console.error(
+            err
+        );
 
         res
         .status(500)
@@ -189,6 +211,8 @@ async(req,res)=>{
     }
 
 });
+
+
 
 
 /* ==========================================
@@ -202,6 +226,7 @@ async function processPayment(
 ){
 
     const duplicate =
+
     await pool.query(
 
         `
@@ -220,11 +245,19 @@ async function processPayment(
     );
 
 
+
     if(
-        duplicate.rows.length
+
+        duplicate
+        .rows
+        .length
+
     ){
+
         return;
+
     }
+
 
 
     const amount =
@@ -245,10 +278,13 @@ async function processPayment(
     );
 
 
+
     const escrow =
     amount * 0.1;
 
 
+
+    /* SAVE PAYMENT */
     await pool.query(
 
         `
@@ -293,13 +329,48 @@ async function processPayment(
     );
 
 
+
+    /* UPDATE ESCROW */
+    await pool.query(
+
+        `
+        UPDATE businesses
+
+        SET escrow =
+
+        COALESCE(
+            escrow,
+            0
+        ) + $1
+
+        WHERE id = $2
+        `,
+
+        [
+
+            escrow,
+
+            meta.vendor_id
+
+        ]
+
+    );
+
+
+
+    /* CREATE CAMPAIGN */
     await createCampaign(
+
         pool,
+
         meta,
+
         payment.reference
+
     );
 
 }
+
 
 
 /* ==========================================
@@ -313,8 +384,10 @@ async function createCampaign(
 
     /* SOCIAL */
     if(
+
         meta.purpose ===
         "social"
+
     ){
 
         await pool.query(
@@ -361,10 +434,13 @@ async function createCampaign(
     }
 
 
+
     /* TASK */
     if(
+
         meta.purpose ===
         "task"
+
     ){
 
         await pool.query(
@@ -405,10 +481,13 @@ async function createCampaign(
     }
 
 
+
     /* FREELANCE */
     if(
+
         meta.purpose ===
         "freelance"
+
     ){
 
         await pool.query(
@@ -436,9 +515,11 @@ async function createCampaign(
                 meta.vendor_id,
                 meta.title,
                 meta.description,
+
                 Number(
                     meta.category
                 ),
+
                 paymentRef
 
             ]
@@ -448,10 +529,13 @@ async function createCampaign(
     }
 
 
+
     /* HIRING */
     if(
+
         meta.purpose ===
         "hiring"
+
     ){
 
         await pool.query(
@@ -490,10 +574,13 @@ async function createCampaign(
     }
 
 
+
     /* INFLUENCER */
     if(
+
         meta.purpose ===
         "influencer"
+
     ){
 
         await pool.query(
@@ -522,9 +609,11 @@ async function createCampaign(
                 meta.vendor_id,
                 meta.title,
                 meta.description,
+
                 Number(
                     meta.category
                 ),
+
                 meta.platform,
                 paymentRef
 
@@ -533,6 +622,7 @@ async function createCampaign(
         );
 
     }
+
 
 
     /* NOTIFICATION */
@@ -563,6 +653,7 @@ async function createCampaign(
     );
 
 }
+
 
 
 module.exports = router;
