@@ -581,80 +581,109 @@ router.get(
 );
 
 /* ==========================================
-TASKS
+SOCIAL TASKS
 ========================================== */
 router.get(
-  "/api/users/tasks",
-  auth,
-  async (req, res) => {
+"/api/users/tasks",
+auth,
+async(req,res)=>{
 
-    const pool =
-      req.app.locals.pool;
+    try{
 
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM tasks
-        WHERE status='ACTIVE'
-        ORDER BY id DESC
-        `
-      );
+        const pool =
+        req.app.locals.pool;
 
-    res.json(
-      result.rows
-    );
 
-  }
-);
+        const result =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM social_tasks
+            WHERE status='ACTIVE'
+            ORDER BY id DESC
+            `
+
+        );
+
+
+        res.json(
+            result.rows
+        );
+
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
 
 
 /* ==========================================
-SUBMIT TASK
+/* ==========================================
+SUBMIT SOCIAL TASK
 ========================================== */
 router.post(
-  "/api/users/submit-task",
-  auth,
-  async (req, res) => {
+"/api/users/submit-task",
+auth,
+async(req,res)=>{
 
-    const pool =
-      req.app.locals.pool;
+    try{
 
-    const {
-      task_id,
-      proof
-    } = req.body;
+        const pool =
+        req.app.locals.pool;
 
 
-    await pool.query(
-      `
-      INSERT INTO submissions
-      (
-        user_id,
-        task_id,
-        proof,
-        status
-      )
-      VALUES
-      (
-        $1,$2,$3,
-        'PENDING'
-      )
-      `,
-      [
-        req.user.id,
-        task_id,
-        proof
-      ]
-    );
+        const {
+            task_id,
+            proof
+        } = req.body;
 
 
-    res.json({
-      message: "Submitted"
-    });
+        await pool.query(
 
-  }
-);
+            `
+            INSERT INTO submissions
+            (
+                user_id,
+                task_id,
+                proof,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,
+                'PENDING'
+            )
+            `,
+
+            [
+                req.user.id,
+                task_id,
+                proof
+            ]
+
+        );
+
+
+        res.json({
+            message:"Submitted"
+        });
+
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
 
 
 /* ==========================================
