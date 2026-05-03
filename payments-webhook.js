@@ -1,5 +1,4 @@
 // payments-webhook.js
-// PRODUCTION HARDENED VERSION
 
 const express = require("express");
 const crypto = require("crypto");
@@ -12,30 +11,50 @@ const router = express.Router();
 PAYSTACK WEBHOOK
 ========================================== */
 router.post(
+
 "/paystack",
 
 express.raw({
+
     type:"application/json"
+
 }),
 
 async(req,res)=>{
 
     try{
 
-        const hash = crypto
+        const hash =
+
+        crypto
+
         .createHmac(
+
             "sha512",
-            process.env.PAYSTACK_SECRET_KEY
+
+            process.env
+            .PAYSTACK_SECRET_KEY
+
         )
-        .update(req.body)
-        .digest("hex");
+
+        .update(
+            req.body
+        )
+
+        .digest(
+            "hex"
+        );
+
 
 
         if(
+
             hash !==
+
             req.headers[
                 "x-paystack-signature"
             ]
+
         ){
 
             return res
@@ -45,19 +64,29 @@ async(req,res)=>{
         }
 
 
-        const event = JSON.parse(
-            req.body.toString()
+
+        const event =
+
+        JSON.parse(
+
+            req.body
+            .toString()
+
         );
 
 
+
         if(
+
             event.event !==
             "charge.success"
+
         ){
 
             return res.end();
 
         }
+
 
 
         await processPayment(
@@ -75,7 +104,9 @@ async(req,res)=>{
         );
 
 
+
         res.end();
+
 
 
     }catch(err){
@@ -95,10 +126,12 @@ async(req,res)=>{
 
 
 
+
 /* ==========================================
 CRYPTO WEBHOOK
 ========================================== */
 router.post(
+
 "/crypto",
 
 express.json(),
@@ -108,9 +141,11 @@ async(req,res)=>{
     try{
 
         if(
+
             req.body
             .payment_status !==
             "finished"
+
         ){
 
             return res.end();
@@ -118,12 +153,16 @@ async(req,res)=>{
         }
 
 
-        const meta = JSON.parse(
+
+        const meta =
+
+        JSON.parse(
 
             req.body
             .order_description
 
         );
+
 
 
         await processPayment(
@@ -135,10 +174,14 @@ async(req,res)=>{
             {
 
                 reference:
-                req.body.order_id,
+
+                req.body
+                .order_id,
 
                 amount:
-                req.body.price_amount
+
+                req.body
+                .price_amount
 
             },
 
@@ -149,7 +192,9 @@ async(req,res)=>{
         );
 
 
+
         res.end();
+
 
 
     }catch(err){
@@ -166,6 +211,7 @@ async(req,res)=>{
     }
 
 });
+
 
 
 
@@ -189,7 +235,9 @@ async function processPayment(
         );
 
 
+
         const duplicate =
+
         await client.query(
 
             `
@@ -199,16 +247,22 @@ async function processPayment(
             `,
 
             [
-                payment.reference
+
+                payment
+                .reference
+
             ]
 
         );
 
 
+
         if(
+
             duplicate
             .rows
             .length
+
         ){
 
             await client.query(
@@ -220,10 +274,13 @@ async function processPayment(
         }
 
 
+
         if(
+
             !meta.vendor_id ||
             !meta.purpose ||
             !meta.title
+
         ){
 
             throw new Error(
@@ -231,6 +288,7 @@ async function processPayment(
             );
 
         }
+
 
 
         const amount =
@@ -249,6 +307,7 @@ async function processPayment(
         Number(
             payment.amount
         );
+
 
 
         const escrow =
@@ -342,9 +401,11 @@ async function processPayment(
         );
 
 
+
         await client.query(
             "COMMIT"
         );
+
 
 
     }catch(err){
@@ -359,6 +420,7 @@ async function processPayment(
         );
 
         throw err;
+
 
 
     }finally{
@@ -384,10 +446,13 @@ async function createCampaign(
     try{
 
 
+
         /* SOCIAL */
         if(
+
             meta.purpose ===
             "social"
+
         ){
 
             await db.query(
@@ -397,23 +462,25 @@ async function createCampaign(
                 (
                     vendor_id,
                     platform,
-                    action,
                     title,
                     description,
-                    campaign_link,
                     reward,
+                    slots,
                     paid,
                     payment_reference,
-                    status
+                    status,
+                    campaign_link
                 )
 
                 VALUES
                 (
-                    $1,$2,$3,$4,$5,$6,
+                    $1,$2,$3,$4,
                     50,
+                    $5,
                     true,
-                    $7,
-                    'ACTIVE'
+                    $6,
+                    'ACTIVE',
+                    $7
                 )
                 `,
 
@@ -424,63 +491,17 @@ async function createCampaign(
                     meta.platform ||
                     meta.category,
 
-                    meta.category,
-
                     meta.title,
 
                     meta.description || "",
 
-                    meta.link || "",
+                    Number(
+                        meta.qty || 1
+                    ),
 
-                    paymentRef
+                    paymentRef,
 
-                ]
-
-            );
-
-        }
-
-
-
-        /* TASK */
-        if(
-            meta.purpose ===
-            "task"
-        ){
-
-            await db.query(
-
-                `
-                INSERT INTO tasks
-                (
-                    vendor_id,
-                    title,
-                    description,
-                    reward,
-                    paid,
-                    payment_reference,
-                    status
-                )
-
-                VALUES
-                (
-                    $1,$2,$3,
-                    50,
-                    true,
-                    $4,
-                    'ACTIVE'
-                )
-                `,
-
-                [
-
-                    meta.vendor_id,
-
-                    meta.title,
-
-                    meta.description || "",
-
-                    paymentRef
+                    meta.link || ""
 
                 ]
 
@@ -492,8 +513,10 @@ async function createCampaign(
 
         /* FREELANCE */
         if(
+
             meta.purpose ===
             "freelance"
+
         ){
 
             await db.query(
@@ -504,14 +527,17 @@ async function createCampaign(
                     vendor_id,
                     title,
                     description,
-                    reward,
+                    budget,
+                    paid,
                     payment_reference,
                     status
                 )
 
                 VALUES
                 (
-                    $1,$2,$3,$4,$5,
+                    $1,$2,$3,$4,
+                    true,
+                    $5,
                     'ACTIVE'
                 )
                 `,
@@ -540,8 +566,10 @@ async function createCampaign(
 
         /* HIRING */
         if(
+
             meta.purpose ===
             "hiring"
+
         ){
 
             await db.query(
@@ -552,61 +580,17 @@ async function createCampaign(
                     vendor_id,
                     title,
                     description,
-                    reward,
+                    salary,
+                    paid,
                     payment_reference,
                     status
                 )
 
                 VALUES
                 (
-                    $1,$2,$3,
-                    2000,
-                    $4,
-                    'ACTIVE'
-                )
-                `,
-
-                [
-
-                    meta.vendor_id,
-
-                    meta.title,
-
-                    meta.description || "",
-
-                    paymentRef
-
-                ]
-
-            );
-
-        }
-
-
-
-        /* INFLUENCER */
-        if(
-            meta.purpose ===
-            "influencer"
-        ){
-
-            await db.query(
-
-                `
-                INSERT INTO influencer_jobs
-                (
-                    vendor_id,
-                    title,
-                    description,
-                    reward,
-                    platform,
-                    payment_reference,
-                    status
-                )
-
-                VALUES
-                (
-                    $1,$2,$3,$4,$5,$6,
+                    $1,$2,$3,$4,
+                    true,
+                    $5,
                     'ACTIVE'
                 )
                 `,
@@ -623,8 +607,58 @@ async function createCampaign(
                         meta.category
                     ),
 
-                    meta.platform ||
-                    meta.category,
+                    paymentRef
+
+                ]
+
+            );
+
+        }
+
+
+
+        /* INFLUENCER */
+        if(
+
+            meta.purpose ===
+            "influencer"
+
+        ){
+
+            await db.query(
+
+                `
+                INSERT INTO influencer_jobs
+                (
+                    vendor_id,
+                    title,
+                    description,
+                    budget,
+                    paid,
+                    payment_reference,
+                    status
+                )
+
+                VALUES
+                (
+                    $1,$2,$3,$4,
+                    true,
+                    $5,
+                    'ACTIVE'
+                )
+                `,
+
+                [
+
+                    meta.vendor_id,
+
+                    meta.title,
+
+                    meta.description || "",
+
+                    Number(
+                        meta.category
+                    ),
 
                     paymentRef
 
@@ -662,6 +696,7 @@ async function createCampaign(
             ]
 
         );
+
 
 
     }catch(err){
