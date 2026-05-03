@@ -772,6 +772,355 @@ async(req,res)=>{
 
 });
 
+/* ==========================================
+DASHBOARD
+========================================== */
+router.get(
+"/api/business/dashboard",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const vendorId =
+        req.user.id;
+
+
+        const payments =
+        await pool.query(
+
+            `
+            SELECT
+            COALESCE(
+                SUM(escrow_amount),
+                0
+            ) AS escrow,
+
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS total_spent
+
+            FROM payments
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const social =
+        await pool.query(
+            `
+            SELECT COUNT(*)
+            FROM social_tasks
+            WHERE vendor_id=$1
+            `,
+            [vendorId]
+        );
+
+
+        const freelance =
+        await pool.query(
+            `
+            SELECT COUNT(*)
+            FROM freelance_jobs
+            WHERE vendor_id=$1
+            `,
+            [vendorId]
+        );
+
+
+        const hiring =
+        await pool.query(
+            `
+            SELECT COUNT(*)
+            FROM hiring_jobs
+            WHERE vendor_id=$1
+            `,
+            [vendorId]
+        );
+
+
+        const influencer =
+        await pool.query(
+            `
+            SELECT COUNT(*)
+            FROM influencer_jobs
+            WHERE vendor_id=$1
+            `,
+            [vendorId]
+        );
+
+
+        res.json({
+
+            escrow:
+            Number(
+                payments.rows[0]
+                .escrow
+            ),
+
+            total_spent:
+            Number(
+                payments.rows[0]
+                .total_spent
+            ),
+
+            social_tasks:
+            Number(
+                social.rows[0]
+                .count
+            ),
+
+            freelance_jobs:
+            Number(
+                freelance.rows[0]
+                .count
+            ),
+
+            hiring_jobs:
+            Number(
+                hiring.rows[0]
+                .count
+            ),
+
+            influencer_jobs:
+            Number(
+                influencer.rows[0]
+                .count
+            )
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+
+/* ==========================================
+PAYMENTS
+========================================== */
+router.get(
+"/api/business/payments",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM payments
+            WHERE vendor_id=$1
+            ORDER BY id DESC
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        res.json(
+            result.rows
+        );
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+
+/* ==========================================
+NOTIFICATIONS
+========================================== */
+router.get(
+"/api/business/notifications",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM notifications
+            WHERE vendor_id=$1
+            ORDER BY id DESC
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        res.json(
+            result.rows
+        );
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+
+/* ==========================================
+SUBMISSIONS
+========================================== */
+router.get(
+"/api/business/submissions",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT
+            s.*,
+            u.name AS user_name,
+            t.title AS task_title
+
+            FROM submissions s
+
+            JOIN users u
+            ON u.id=s.user_id
+
+            JOIN tasks t
+            ON t.id=s.task_id
+
+            WHERE t.vendor_id=$1
+
+            ORDER BY s.id DESC
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        res.json(
+            result.rows
+        );
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+
+/* ==========================================
+ANALYTICS
+========================================== */
+router.get(
+"/api/business/analytics",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+
+        const vendorId =
+        req.user.id;
+
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS total_spent,
+
+            COUNT(*) AS payments
+
+            FROM payments
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        res.json({
+
+            total_spent:
+            Number(
+                result.rows[0]
+                .total_spent
+            ),
+
+            payments:
+            Number(
+                result.rows[0]
+                .payments
+            )
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
 
 /* ==========================================
 PRICING
