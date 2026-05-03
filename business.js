@@ -1155,24 +1155,67 @@ async(req,res)=>{
 
             `
             SELECT
-            s.*,
+
+            s.id,
+            s.status,
+            s.proof,
+            s.created_at,
+
             u.name AS user_name,
-            t.title AS task_title
+
+            COALESCE(
+
+                st.title,
+
+                f.title,
+
+                h.title,
+
+                i.title
+
+            ) AS task_title
 
             FROM submissions s
 
             JOIN users u
             ON u.id=s.user_id
 
-            JOIN tasks t
-            ON t.id=s.task_id
 
-            WHERE t.vendor_id=$1
+            LEFT JOIN social_tasks st
+            ON st.id=s.task_id
+
+
+            LEFT JOIN freelance_jobs f
+            ON f.id=s.task_id
+
+
+            LEFT JOIN hiring_jobs h
+            ON h.id=s.task_id
+
+
+            LEFT JOIN influencer_jobs i
+            ON i.id=s.task_id
+
+
+            WHERE
+
+            st.vendor_id=$1
+
+            OR f.vendor_id=$1
+
+            OR h.vendor_id=$1
+
+            OR i.vendor_id=$1
+
 
             ORDER BY s.id DESC
             `,
 
-            [req.user.id]
+            [
+
+                req.user.id
+
+            ]
 
         );
 
@@ -1184,7 +1227,10 @@ async(req,res)=>{
     }catch(err){
 
         res.status(500).json({
-            message:err.message
+
+            message:
+            err.message
+
         });
 
     }
