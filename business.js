@@ -312,7 +312,143 @@ async(req,res)=>{
 
 });
 
+/* ==========================================
+APPROVE FREELANCE
+========================================== */
 
+router.post(
+"/api/business/approve-freelance",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        await pool.query(
+
+            `
+            UPDATE freelance_applications
+            SET status='APPROVED'
+            WHERE
+            id=$1
+            AND vendor_id=$2
+            `,
+
+            [
+                req.body.application_id,
+                req.user.id
+            ]
+
+        );
+
+        res.json({
+            message:"Freelance approved"
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+
+/* ==========================================
+HIRING APPROVAL
+========================================== */
+router.post(
+"/api/business/approve-hiring",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        await pool.query(
+
+            `
+            UPDATE hiring_applications
+            SET status='APPROVED'
+            WHERE
+            id=$1
+            AND vendor_id=$2
+            `,
+
+            [
+                req.body.application_id,
+                req.user.id
+            ]
+
+        );
+
+        res.json({
+            message:"Hiring approved"
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+
+/* ==========================================
+APPROVE INFLUENCE
+========================================== */
+ router.post(
+"/api/business/approve-influencer",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        await pool.query(
+
+            `
+            UPDATE influencer_applications
+            SET status='APPROVED'
+            WHERE
+            id=$1
+            AND vendor_id=$2
+            `,
+
+            [
+                req.body.application_id,
+                req.user.id
+            ]
+
+        );
+
+        res.json({
+            message:"Influencer approved"
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});               
 /* ==========================================
 VERIFY EMAIL
 ========================================== */
