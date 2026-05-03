@@ -911,4 +911,201 @@ router.get(
   }
 );
 
+router.get(
+"/api/users/freelance-jobs",
+auth,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM freelance_jobs
+            WHERE status='ACTIVE'
+            ORDER BY id DESC
+            `
+
+        );
+
+        res.json(
+            result.rows
+        );
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+router.post(
+"/api/users/apply-freelance",
+auth,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const {
+            job_id,
+            proposal
+        } = req.body;
+
+        await pool.query(
+
+            `
+            INSERT INTO freelance_applications
+            (
+                user_id,
+                job_id,
+                proposal,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,
+                'PENDING'
+            )
+            `,
+
+            [
+                req.user.id,
+                job_id,
+                proposal
+            ]
+
+        );
+
+        res.json({
+            message:"Applied"
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+router.post(
+"/api/users/apply-hiring",
+auth,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const {
+            job_id,
+            cv_link
+        } = req.body;
+
+        await pool.query(
+
+            `
+            INSERT INTO hiring_applications
+            (
+                user_id,
+                job_id,
+                cv_link,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,
+                'PENDING'
+            )
+            `,
+
+            [
+                req.user.id,
+                job_id,
+                cv_link
+            ]
+
+        );
+
+        res.json({
+            message:"Application sent"
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+router.post(
+"/api/users/apply-influencer",
+auth,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const {
+            job_id,
+            portfolio_link
+        } = req.body;
+
+        await pool.query(
+
+            `
+            INSERT INTO influencer_applications
+            (
+                user_id,
+                job_id,
+                portfolio_link,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,
+                'PENDING'
+            )
+            `,
+
+            [
+                req.user.id,
+                job_id,
+                portfolio_link
+            ]
+
+        );
+
+        res.json({
+            message:"Application sent"
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});          
+
 module.exports = router;
