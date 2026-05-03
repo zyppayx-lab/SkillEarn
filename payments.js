@@ -254,7 +254,7 @@ function calcPrice(
 
 
 /* ==========================================
-PAYSTACK INIT
+PAYSTACK
 ========================================== */
 async function initPaystack(
     email,
@@ -313,7 +313,7 @@ async function initPaystack(
 
 
 /* ==========================================
-PAYSTACK
+PAYSTACK INIT
 ========================================== */
 router.post(
 "/api/paystack/create-payment",
@@ -449,7 +449,7 @@ async(req,res)=>{
 
 
 /* ==========================================
-CRYPTO
+CRYPTO INIT
 ========================================== */
 router.post(
 "/api/crypto/create-payment",
@@ -487,6 +487,18 @@ async(req,res)=>{
             req.body.qty
 
         );
+
+
+        if(!pricing){
+
+            return res
+            .status(400)
+            .json({
+                message:
+                "Invalid pricing"
+            });
+
+        }
 
 
         const ref =
@@ -605,5 +617,6 @@ async(req,res)=>{
     }
 
 });
+
 
 module.exports = router;
