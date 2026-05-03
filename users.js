@@ -946,6 +946,79 @@ async(req,res)=>{
     }
 
 });
+
+router.get(
+"/api/users/hiring-jobs",
+auth,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM hiring_jobs
+            WHERE status='ACTIVE'
+            ORDER BY id DESC
+            `
+
+        );
+
+        res.json(
+            result.rows
+        );
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+router.get(
+"/api/users/influencer-jobs",
+auth,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM influencer_jobs
+            WHERE status='ACTIVE'
+            ORDER BY id DESC
+            `
+
+        );
+
+        res.json(
+            result.rows
+        );
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
 router.post(
 "/api/users/apply-freelance",
 auth,
