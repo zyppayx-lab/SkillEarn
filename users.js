@@ -561,13 +561,13 @@ router.get(
       );
 
     const tasks =
-      await pool.query(
-        `
-        SELECT COUNT(*)
-        FROM tasks
-        WHERE status='ACTIVE'
-        `
-      );
+  await pool.query(
+    `
+    SELECT COUNT(*)
+    FROM social_tasks
+    WHERE status='ACTIVE'
+    `
+  );
 
     res.json({
       profile:
