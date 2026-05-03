@@ -1,11 +1,10 @@
 // payments-webhook.js
-// FINAL PRODUCTION VERSION
+// PRODUCTION HARDENED VERSION
 
 const express = require("express");
 const crypto = require("crypto");
 
-const router =
-express.Router();
+const router = express.Router();
 
 
 
@@ -13,50 +12,30 @@ express.Router();
 PAYSTACK WEBHOOK
 ========================================== */
 router.post(
-
 "/paystack",
 
 express.raw({
-
     type:"application/json"
-
 }),
 
 async(req,res)=>{
 
     try{
 
-        const hash =
-
-        crypto
-
+        const hash = crypto
         .createHmac(
-
             "sha512",
-
-            process.env
-            .PAYSTACK_SECRET_KEY
-
+            process.env.PAYSTACK_SECRET_KEY
         )
-
-        .update(
-            req.body
-        )
-
-        .digest(
-            "hex"
-        );
-
+        .update(req.body)
+        .digest("hex");
 
 
         if(
-
             hash !==
-
             req.headers[
                 "x-paystack-signature"
             ]
-
         ){
 
             return res
@@ -66,29 +45,19 @@ async(req,res)=>{
         }
 
 
-
-        const event =
-
-        JSON.parse(
-
-            req.body
-            .toString()
-
+        const event = JSON.parse(
+            req.body.toString()
         );
 
 
-
         if(
-
             event.event !==
             "charge.success"
-
         ){
 
             return res.end();
 
         }
-
 
 
         await processPayment(
@@ -106,14 +75,13 @@ async(req,res)=>{
         );
 
 
-
         res.end();
-
 
 
     }catch(err){
 
         console.error(
+            "PAYSTACK WEBHOOK:",
             err
         );
 
@@ -127,12 +95,10 @@ async(req,res)=>{
 
 
 
-
 /* ==========================================
 CRYPTO WEBHOOK
 ========================================== */
 router.post(
-
 "/crypto",
 
 express.json(),
@@ -142,11 +108,9 @@ async(req,res)=>{
     try{
 
         if(
-
             req.body
             .payment_status !==
             "finished"
-
         ){
 
             return res.end();
@@ -154,16 +118,12 @@ async(req,res)=>{
         }
 
 
-
-        const meta =
-
-        JSON.parse(
+        const meta = JSON.parse(
 
             req.body
             .order_description
 
         );
-
 
 
         await processPayment(
@@ -175,14 +135,10 @@ async(req,res)=>{
             {
 
                 reference:
-
-                req.body
-                .order_id,
+                req.body.order_id,
 
                 amount:
-
-                req.body
-                .price_amount
+                req.body.price_amount
 
             },
 
@@ -193,14 +149,13 @@ async(req,res)=>{
         );
 
 
-
         res.end();
-
 
 
     }catch(err){
 
         console.error(
+            "CRYPTO WEBHOOK:",
             err
         );
 
@@ -211,7 +166,6 @@ async(req,res)=>{
     }
 
 });
-
 
 
 
@@ -225,151 +179,196 @@ async function processPayment(
     method
 ){
 
-    const duplicate =
+    const client =
+    await pool.connect();
 
-    await pool.query(
+    try{
 
-        `
-        SELECT id
-        FROM payments
-        WHERE reference=$1
-        `,
-
-        [
-
-            payment
-            .reference
-
-        ]
-
-    );
+        await client.query(
+            "BEGIN"
+        );
 
 
+        const duplicate =
+        await client.query(
 
-    if(
+            `
+            SELECT id
+            FROM payments
+            WHERE reference=$1
+            `,
 
-        duplicate
-        .rows
-        .length
+            [
+                payment.reference
+            ]
 
-    ){
-
-        return;
-
-    }
-
-
-
-    const amount =
-
-    method ===
-    "paystack"
-
-    ?
-
-    Number(
-        payment.amount
-    ) / 100
-
-    :
-
-    Number(
-        payment.amount
-    );
+        );
 
 
+        if(
+            duplicate
+            .rows
+            .length
+        ){
 
-    const escrow =
-    amount * 0.1;
+            await client.query(
+                "ROLLBACK"
+            );
+
+            return;
+
+        }
+
+
+        if(
+            !meta.vendor_id ||
+            !meta.purpose ||
+            !meta.title
+        ){
+
+            throw new Error(
+                "Invalid payment metadata"
+            );
+
+        }
+
+
+        const amount =
+
+        method ===
+        "paystack"
+
+        ?
+
+        Number(
+            payment.amount
+        ) / 100
+
+        :
+
+        Number(
+            payment.amount
+        );
+
+
+        const escrow =
+        amount * 0.1;
 
 
 
-    /* SAVE PAYMENT */
-    await pool.query(
+        /* SAVE PAYMENT */
+        await client.query(
 
-        `
-        INSERT INTO payments
-        (
-            vendor_id,
-            amount,
-            escrow_amount,
-            released_amount,
-            method,
-            purpose,
-            reference,
-            status
-        )
+            `
+            INSERT INTO payments
+            (
+                vendor_id,
+                amount,
+                escrow_amount,
+                released_amount,
+                method,
+                purpose,
+                reference,
+                status
+            )
 
-        VALUES
-        (
-            $1,$2,$3,$4,
-            $5,$6,$7,
-            'SUCCESS'
-        )
-        `,
+            VALUES
+            (
+                $1,$2,$3,$4,
+                $5,$6,$7,
+                'SUCCESS'
+            )
+            `,
 
-        [
+            [
 
-            meta.vendor_id,
+                meta.vendor_id,
 
-            amount,
+                amount,
 
-            escrow,
+                escrow,
 
-            amount-escrow,
+                amount-escrow,
 
-            method,
+                method,
 
-            meta.purpose,
+                meta.purpose,
+
+                payment.reference
+
+            ]
+
+        );
+
+
+
+        /* UPDATE ESCROW */
+        await client.query(
+
+            `
+            UPDATE businesses
+
+            SET escrow =
+
+            COALESCE(
+                escrow,
+                0
+            ) + $1
+
+            WHERE id = $2
+            `,
+
+            [
+
+                escrow,
+
+                meta.vendor_id
+
+            ]
+
+        );
+
+
+
+        /* CREATE CAMPAIGN */
+        await createCampaign(
+
+            client,
+
+            meta,
 
             payment.reference
 
-        ]
-
-    );
+        );
 
 
-
-    /* UPDATE ESCROW */
-    await pool.query(
-
-        `
-        UPDATE businesses
-
-        SET escrow =
-
-        COALESCE(
-            escrow,
-            0
-        ) + $1
-
-        WHERE id = $2
-        `,
-
-        [
-
-            escrow,
-
-            meta.vendor_id
-
-        ]
-
-    );
+        await client.query(
+            "COMMIT"
+        );
 
 
+    }catch(err){
 
-    /* CREATE CAMPAIGN */
-    await createCampaign(
+        await client.query(
+            "ROLLBACK"
+        );
 
-        pool,
+        console.error(
+            "PAYMENT PROCESS:",
+            err
+        );
 
-        meta,
+        throw err;
 
-        payment.reference
 
-    );
+    }finally{
+
+        client.release();
+
+    }
 
 }
+
 
 
 
@@ -377,280 +376,304 @@ async function processPayment(
 CREATE CAMPAIGN
 ========================================== */
 async function createCampaign(
-    pool,
+    db,
     meta,
     paymentRef
 ){
 
-    /* SOCIAL */
-    if(
+    try{
 
-        meta.purpose ===
-        "social"
 
-    ){
+        /* SOCIAL */
+        if(
+            meta.purpose ===
+            "social"
+        ){
 
-        await pool.query(
+            await db.query(
+
+                `
+                INSERT INTO social_tasks
+                (
+                    vendor_id,
+                    platform,
+                    action,
+                    title,
+                    description,
+                    campaign_link,
+                    reward,
+                    paid,
+                    payment_reference,
+                    status
+                )
+
+                VALUES
+                (
+                    $1,$2,$3,$4,$5,$6,
+                    50,
+                    true,
+                    $7,
+                    'ACTIVE'
+                )
+                `,
+
+                [
+
+                    meta.vendor_id,
+
+                    meta.platform ||
+                    meta.category,
+
+                    meta.category,
+
+                    meta.title,
+
+                    meta.description || "",
+
+                    meta.link || "",
+
+                    paymentRef
+
+                ]
+
+            );
+
+        }
+
+
+
+        /* TASK */
+        if(
+            meta.purpose ===
+            "task"
+        ){
+
+            await db.query(
+
+                `
+                INSERT INTO tasks
+                (
+                    vendor_id,
+                    title,
+                    description,
+                    reward,
+                    paid,
+                    payment_reference,
+                    status
+                )
+
+                VALUES
+                (
+                    $1,$2,$3,
+                    50,
+                    true,
+                    $4,
+                    'ACTIVE'
+                )
+                `,
+
+                [
+
+                    meta.vendor_id,
+
+                    meta.title,
+
+                    meta.description || "",
+
+                    paymentRef
+
+                ]
+
+            );
+
+        }
+
+
+
+        /* FREELANCE */
+        if(
+            meta.purpose ===
+            "freelance"
+        ){
+
+            await db.query(
+
+                `
+                INSERT INTO freelance_jobs
+                (
+                    vendor_id,
+                    title,
+                    description,
+                    reward,
+                    payment_reference,
+                    status
+                )
+
+                VALUES
+                (
+                    $1,$2,$3,$4,$5,
+                    'ACTIVE'
+                )
+                `,
+
+                [
+
+                    meta.vendor_id,
+
+                    meta.title,
+
+                    meta.description || "",
+
+                    Number(
+                        meta.category
+                    ),
+
+                    paymentRef
+
+                ]
+
+            );
+
+        }
+
+
+
+        /* HIRING */
+        if(
+            meta.purpose ===
+            "hiring"
+        ){
+
+            await db.query(
+
+                `
+                INSERT INTO hiring_jobs
+                (
+                    vendor_id,
+                    title,
+                    description,
+                    reward,
+                    payment_reference,
+                    status
+                )
+
+                VALUES
+                (
+                    $1,$2,$3,
+                    2000,
+                    $4,
+                    'ACTIVE'
+                )
+                `,
+
+                [
+
+                    meta.vendor_id,
+
+                    meta.title,
+
+                    meta.description || "",
+
+                    paymentRef
+
+                ]
+
+            );
+
+        }
+
+
+
+        /* INFLUENCER */
+        if(
+            meta.purpose ===
+            "influencer"
+        ){
+
+            await db.query(
+
+                `
+                INSERT INTO influencer_jobs
+                (
+                    vendor_id,
+                    title,
+                    description,
+                    reward,
+                    platform,
+                    payment_reference,
+                    status
+                )
+
+                VALUES
+                (
+                    $1,$2,$3,$4,$5,$6,
+                    'ACTIVE'
+                )
+                `,
+
+                [
+
+                    meta.vendor_id,
+
+                    meta.title,
+
+                    meta.description || "",
+
+                    Number(
+                        meta.category
+                    ),
+
+                    meta.platform ||
+                    meta.category,
+
+                    paymentRef
+
+                ]
+
+            );
+
+        }
+
+
+
+        /* NOTIFICATION */
+        await db.query(
 
             `
-            INSERT INTO social_tasks
+            INSERT INTO notifications
             (
                 vendor_id,
-                platform,
-                action,
-                title,
-                description,
-                campaign_link,
-                reward,
-                paid,
-                payment_reference,
-                status
+                message
             )
 
             VALUES
             (
-                $1,$2,$3,$4,$5,$6,
-                50,
-                true,
-                $7,
-                'ACTIVE'
+                $1,
+                $2
             )
             `,
 
             [
 
                 meta.vendor_id,
-                meta.platform,
-                meta.category,
-                meta.title,
-                meta.description,
-                meta.link,
-                paymentRef
+
+                "Payment successful. Campaign is live."
 
             ]
 
         );
 
-    }
 
+    }catch(err){
 
-
-    /* TASK */
-    if(
-
-        meta.purpose ===
-        "task"
-
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO tasks
-            (
-                vendor_id,
-                title,
-                description,
-                reward,
-                paid,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,$2,$3,
-                50,
-                true,
-                $4,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                meta.vendor_id,
-                meta.title,
-                meta.description,
-                paymentRef
-
-            ]
-
+        console.error(
+            "CAMPAIGN INSERT:",
+            err
         );
 
-    }
-
-
-
-    /* FREELANCE */
-    if(
-
-        meta.purpose ===
-        "freelance"
-
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO freelance_jobs
-            (
-                vendor_id,
-                title,
-                description,
-                reward,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,$2,$3,$4,$5,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                meta.vendor_id,
-                meta.title,
-                meta.description,
-
-                Number(
-                    meta.category
-                ),
-
-                paymentRef
-
-            ]
-
-        );
+        throw err;
 
     }
-
-
-
-    /* HIRING */
-    if(
-
-        meta.purpose ===
-        "hiring"
-
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO hiring_jobs
-            (
-                vendor_id,
-                title,
-                description,
-                reward,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,$2,$3,
-                2000,
-                $4,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                meta.vendor_id,
-                meta.title,
-                meta.description,
-                paymentRef
-
-            ]
-
-        );
-
-    }
-
-
-
-    /* INFLUENCER */
-    if(
-
-        meta.purpose ===
-        "influencer"
-
-    ){
-
-        await pool.query(
-
-            `
-            INSERT INTO influencer_jobs
-            (
-                vendor_id,
-                title,
-                description,
-                reward,
-                platform,
-                payment_reference,
-                status
-            )
-
-            VALUES
-            (
-                $1,$2,$3,$4,$5,$6,
-                'ACTIVE'
-            )
-            `,
-
-            [
-
-                meta.vendor_id,
-                meta.title,
-                meta.description,
-
-                Number(
-                    meta.category
-                ),
-
-                meta.platform,
-                paymentRef
-
-            ]
-
-        );
-
-    }
-
-
-
-    /* NOTIFICATION */
-    await pool.query(
-
-        `
-        INSERT INTO notifications
-        (
-            vendor_id,
-            message
-        )
-
-        VALUES
-        (
-            $1,
-            $2
-        )
-        `,
-
-        [
-
-            meta.vendor_id,
-
-            "Payment successful. Campaign is live."
-
-        ]
-
-    );
 
 }
 
