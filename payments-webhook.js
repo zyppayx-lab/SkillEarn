@@ -8,6 +8,9 @@ const router =
 express.Router();
 
 
+/* ==========================================
+PAYSTACK WEBHOOK
+========================================== */
 router.post(
 
 "/paystack",
@@ -110,6 +113,9 @@ async(req,res)=>{
 });
 
 
+/* ==========================================
+CRYPTO WEBHOOK
+========================================== */
 router.post(
 
 "/crypto",
@@ -185,6 +191,9 @@ async(req,res)=>{
 });
 
 
+/* ==========================================
+PROCESS PAYMENT
+========================================== */
 async function processPayment(
     pool,
     payment,
@@ -293,12 +302,16 @@ async function processPayment(
 }
 
 
+/* ==========================================
+CREATE CAMPAIGN
+========================================== */
 async function createCampaign(
     pool,
     meta,
     paymentRef
 ){
 
+    /* SOCIAL */
     if(
         meta.purpose ===
         "social"
@@ -323,8 +336,10 @@ async function createCampaign(
 
             VALUES
             (
-                $1,$2,$3,$4,$5,
-                50,true,$6,
+                $1,$2,$3,$4,$5,$6,
+                50,
+                true,
+                $7,
                 'ACTIVE'
             )
             `,
@@ -332,17 +347,11 @@ async function createCampaign(
             [
 
                 meta.vendor_id,
-
                 meta.platform,
-
                 meta.category,
-
                 meta.title,
-
                 meta.description,
-
                 meta.link,
-
                 paymentRef
 
             ]
@@ -352,6 +361,7 @@ async function createCampaign(
     }
 
 
+    /* TASK */
     if(
         meta.purpose ===
         "task"
@@ -374,7 +384,9 @@ async function createCampaign(
             VALUES
             (
                 $1,$2,$3,
-                50,true,$4,
+                50,
+                true,
+                $4,
                 'ACTIVE'
             )
             `,
@@ -382,11 +394,8 @@ async function createCampaign(
             [
 
                 meta.vendor_id,
-
                 meta.title,
-
                 meta.description,
-
                 paymentRef
 
             ]
@@ -395,6 +404,165 @@ async function createCampaign(
 
     }
 
+
+    /* FREELANCE */
+    if(
+        meta.purpose ===
+        "freelance"
+    ){
+
+        await pool.query(
+
+            `
+            INSERT INTO freelance_jobs
+            (
+                vendor_id,
+                title,
+                description,
+                reward,
+                payment_reference,
+                status
+            )
+
+            VALUES
+            (
+                $1,$2,$3,$4,$5,
+                'ACTIVE'
+            )
+            `,
+
+            [
+
+                meta.vendor_id,
+                meta.title,
+                meta.description,
+                Number(
+                    meta.category
+                ),
+                paymentRef
+
+            ]
+
+        );
+
+    }
+
+
+    /* HIRING */
+    if(
+        meta.purpose ===
+        "hiring"
+    ){
+
+        await pool.query(
+
+            `
+            INSERT INTO hiring_jobs
+            (
+                vendor_id,
+                title,
+                description,
+                reward,
+                payment_reference,
+                status
+            )
+
+            VALUES
+            (
+                $1,$2,$3,
+                2000,
+                $4,
+                'ACTIVE'
+            )
+            `,
+
+            [
+
+                meta.vendor_id,
+                meta.title,
+                meta.description,
+                paymentRef
+
+            ]
+
+        );
+
+    }
+
+
+    /* INFLUENCER */
+    if(
+        meta.purpose ===
+        "influencer"
+    ){
+
+        await pool.query(
+
+            `
+            INSERT INTO influencer_jobs
+            (
+                vendor_id,
+                title,
+                description,
+                reward,
+                platform,
+                payment_reference,
+                status
+            )
+
+            VALUES
+            (
+                $1,$2,$3,$4,$5,$6,
+                'ACTIVE'
+            )
+            `,
+
+            [
+
+                meta.vendor_id,
+                meta.title,
+                meta.description,
+                Number(
+                    meta.category
+                ),
+                meta.platform,
+                paymentRef
+
+            ]
+
+        );
+
+    }
+
+
+    /* NOTIFICATION */
+    await pool.query(
+
+        `
+        INSERT INTO notifications
+        (
+            vendor_id,
+            message
+        )
+
+        VALUES
+        (
+            $1,
+            $2
+        )
+        `,
+
+        [
+
+            meta.vendor_id,
+
+            "Payment successful. Campaign is live."
+
+        ]
+
+    );
+
 }
+
 
 module.exports = router;
