@@ -1289,6 +1289,52 @@ async(req,res)=>{
 
 });
 
+router.get(
+"/api/business/pricing",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const country =
+    req.user.country;
+
+
+    res.json({
+
+        social:{
+            amount:
+            localPrice(
+                PRICING.SOCIAL_PER_USER,
+                country
+            )
+        },
+
+        freelance:{
+            min:
+            localPrice(
+                PRICING.FREELANCE_MIN,
+                country
+            )
+        },
+
+        hiring:
+        localPrice(
+            PRICING.HIRING_FIXED,
+            country
+        ),
+
+        influencer:{
+            min:
+            localPrice(
+                PRICING.INFLUENCER_MIN,
+                country
+            )
+        }
+
+    });
+
+});
+
 /* ==========================================
 PRICING
 ========================================== */
