@@ -1,1658 +1,384 @@
 const express = require("express");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
-const { Resend } = require("resend");
-
 const router = express.Router();
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
+const crypto = require("crypto");
+const axios = require("axios");
+const { Resend } = require("resend");
+const db = require("./db");
+
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-
-/* ==========================================
-AUTH
-========================================== */
-function auth(req, res, next) {
-  const token = (req.headers.authorization || "")
-    .replace("Bearer ", "");
+// ================= AUTH MIDDLEWARE =================
+const auth = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ msg: "No token" });
 
   try {
-    req.user = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
-
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
-
   } catch {
-    return res.status(401).json({
-      message: "Unauthorized"
-    });
+    res.status(401).json({ msg: "Invalid token" });
   }
+};
+
+// ================= LEDGER HELPER =================
+async function addTransaction({ userId, amount, type, reference }) {
+  await db.query(
+    `INSERT INTO transactions(user_id,amount,type,reference,status)
+     VALUES($1,$2,$3,$4,'success')`,
+    [userId, amount, type, reference]
+  );
 }
 
-
-/* ==========================================
-CONFIG
-========================================== */
-const NAIRA_MIN = 1000;
-const CRYPTO_MIN = 1;
-const FEE_PERCENT = 1.75;
-const NG_REFERRAL_REWARD = 500;
-const USD_REFERRAL_REWARD = 1;
-
-
-/* ==========================================
-OTP
-========================================== */
-async function sendOTP(email, code) {
-  await resend.emails.send({
-    from: process.env.FROM_EMAIL,
-    to: email,
-    subject: "Verify your SkillEarn account",
-    html: `
-      <h2>SkillEarn</h2>
-      <h1>${code}</h1>
-      <p>Expires in 10 minutes</p>
-    `
-  });
-}
-
-
-/* ==========================================
-REGISTER
-========================================== */
-router.post(
-  "/api/auth/register",
-  async (req, res) => {
-
-    try {
-
-      const pool = req.app.locals.pool;
-
-      const {
-        name,
-        email,
-        password,
-        country,
-        referral_code
-      } = req.body;
-
-
-      const exists = await pool.query(
-        "SELECT id FROM users WHERE email=$1",
-        [email]
-      );
-
-      if (exists.rows.length > 0) {
-        return res.status(400).json({
-          message: "Email already registered"
-        });
-      }
-
-
-      const hash =
-        await bcrypt.hash(password, 10);
-
-      const otp =
-        Math.floor(
-          100000 + Math.random() * 900000
-        ).toString();
-
-      const myReferralCode =
-        crypto.randomBytes(4)
-          .toString("hex")
-          .toUpperCase();
-
-
-      const created =
-        await pool.query(
-          `
-          INSERT INTO users
-          (
-            name,
-            email,
-            password_hash,
-            role,
-            balance,
-            status,
-            email_verified,
-            otp_code,
-            otp_expires,
-            country,
-            referral_code
-          )
-          VALUES
-          (
-            $1,$2,$3,
-            'user',
-            0,
-            'active',
-            false,
-            $4,
-            NOW()+INTERVAL '10 minutes',
-            $5,
-            $6
-          )
-          RETURNING *
-          `,
-          [
-            name,
-            email,
-            hash,
-            otp,
-            country || "NG",
-            myReferralCode
-          ]
-        );
-
-
-      const user =
-        created.rows[0];
-
-
-      /* REFERRAL */
-      if (referral_code) {
-
-        const ref =
-          await pool.query(
-            `
-            SELECT id
-            FROM users
-            WHERE referral_code=$1
-            `,
-            [referral_code]
-          );
-
-
-        if (ref.rows.length > 0) {
-
-          const referrerId =
-            ref.rows[0].id;
-
-
-          await pool.query(
-            `
-            UPDATE users
-            SET referred_by=$1
-            WHERE id=$2
-            `,
-            [
-              referrerId,
-              user.id
-            ]
-          );
-
-        }
-
-      }
-
-
-      await sendOTP(
-        email,
-        otp
-      );
-
-
-      res.json({
-        message: "OTP sent"
-      });
-
-    } catch (error) {
-
-      res.status(500).json({
-        message: error.message
-      });
-
-    }
-
-  }
-);
-
-
-/* ==========================================
-VERIFY EMAIL
-========================================== */
-router.post(
-  "/api/auth/verify-email",
-  async (req, res) => {
-
-    const pool =
-      req.app.locals.pool;
-
-    const {
-      email,
-      otp
-    } = req.body;
-
-
-    const user =
-      await pool.query(
-        `
-        SELECT *
-        FROM users
-        WHERE email=$1
-        AND otp_code=$2
-        AND otp_expires > NOW()
-        `,
-        [
-          email,
-          otp
-        ]
-      );
-
-
-    if (!user.rows.length) {
-
-      return res.status(400).json({
-        message: "Invalid OTP"
-      });
-
-    }
-
-
-    await pool.query(
-      `
-      UPDATE users
-      SET
-      email_verified=true,
-      otp_code=NULL,
-      otp_expires=NULL
-      WHERE email=$1
-      `,
-      [email]
-    );
-
-
-    res.json({
-      message: "Verified"
-    });
-
-  }
-);
-
-/* ==========================================
-RESEND OTP
-========================================== */
-router.post(
-  "/api/auth/resend-otp",
-  async (req, res) => {
-
-    const pool = req.app.locals.pool;
-    const { email } = req.body;
-
-    const otp =
-      Math.floor(
-        100000 + Math.random() * 900000
-      ).toString();
-
-    await pool.query(
-      `
-      UPDATE users
-      SET
-      otp_code=$1,
-      otp_expires=
-      NOW()+INTERVAL '10 minutes'
-      WHERE email=$2
-      `,
-      [
-        otp,
-        email
-      ]
-    );
-
-    await sendOTP(
-      email,
-      otp
-    );
-
-    res.json({
-      message: "OTP resent"
-    });
-
-  }
-);
-
-/* ==========================================
-LOGIN
-========================================== */
-router.post(
-  "/api/auth/login",
-  async (req, res) => {
-
-    const pool =
-      req.app.locals.pool;
-
-    const {
-      email,
-      password
-    } = req.body;
-
-
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM users
-        WHERE email=$1
-        `,
-        [email]
-      );
-
-
-    if (!result.rows.length) {
-
-      return res.status(400).json({
-        message: "Invalid login"
-      });
-
-    }
-
-
-    const user =
-      result.rows[0];
-
-
-    const valid =
-      await bcrypt.compare(
-        password,
-        user.password_hash
-      );
-
-
-    if (!valid) {
-
-      return res.status(400).json({
-        message: "Invalid login"
-      });
-
-    }
-
-
-    if (!user.email_verified) {
-
-      return res.status(403).json({
-        message: "Verify email first"
-      });
-
-    }
-
-
-    /* TRACK DEVICE */
-    await pool.query(
-      `
-      UPDATE users
-      SET
-      last_ip=$1,
-      last_user_agent=$2
-      WHERE id=$3
-      `,
-      [
-        req.ip,
-        req.headers["user-agent"],
-        user.id
-      ]
-    );
-
-
-    const token =
-      jwt.sign(
-        {
-          id: user.id,
-          role: "user",
-          country: user.country
-        },
-        process.env.JWT_SECRET,
-        {
-          expiresIn: "7d"
-        }
-      );
-
-
-    res.json({
-  message: "Login successful",
-  token,
-
-  user: {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    country: user.country,
-    balance: user.balance,
-    referral_code: user.referral_code
-  }
-});
-
-  }
-);
-  
-/* ==========================================
-FORGOT PASSWORD
-========================================== */
-router.post(
-  "/api/auth/forgot-password",
-  async (req, res) => {
-
-    const pool =
-      req.app.locals.pool;
-
-    const { email } =
-      req.body;
-
-    const otp =
-      Math.floor(
-        100000 + Math.random() * 900000
-      ).toString();
-
-    await pool.query(
-      `
-      UPDATE users
-      SET
-      reset_otp=$1,
-      reset_otp_expires=
-      NOW()+INTERVAL '10 minutes'
-      WHERE email=$2
-      `,
-      [
-        otp,
-        email
-      ]
-    );
-
-    await sendOTP(
-      email,
-      otp
-    );
-
-    res.json({
-      message:
-        "Reset OTP sent"
-    });
-
-  }
-);
-/* ==========================================
-RESET PASSWORD
-========================================== */
-router.post(
-  "/api/auth/reset-password",
-  async (req, res) => {
-
-    const pool =
-      req.app.locals.pool;
-
-    const {
-      email,
-      otp,
-      new_password
-    } = req.body;
-
-    const result =
-      await pool.query(
-        `
-        SELECT id
-        FROM users
-        WHERE email=$1
-        AND reset_otp=$2
-        AND reset_otp_expires > NOW()
-        `,
-        [
-          email,
-          otp
-        ]
-      );
-
-    if (!result.rows.length) {
-      return res.status(400).json({
-        message: "Invalid OTP"
-      });
-    }
-
-    const hash =
-      await bcrypt.hash(
-        new_password,
-        10
-      );
-
-    await pool.query(
-      `
-      UPDATE users
-      SET
-      password_hash=$1,
-      reset_otp=NULL,
-      reset_otp_expires=NULL
-      WHERE email=$2
-      `,
-      [
-        hash,
-        email
-      ]
-    );
-
-    res.json({
-      message:
-        "Password updated"
-    });
-
-  }
-);
-/* ==========================================
-DASHBOARD
-========================================== */
-router.get(
-  "/api/users/dashboard",
-  auth,
-  async (req, res) => {
-
-    const pool =
-      req.app.locals.pool;
-
-    const profile =
-      await pool.query(
-        `
-        SELECT
-        id,
-        name,
-        email,
-        balance
-        FROM users
-        WHERE id=$1
-        `,
-        [req.user.id]
-      );
-
-    const tasks =
-  await pool.query(
-    `
-    SELECT COUNT(*)
-    FROM social_tasks
-    WHERE status='ACTIVE'
-    `
+// ================= FRAUD CHECK (basic) =================
+async function isSuspicious(userId, amount) {
+  const recent = await db.query(
+    `SELECT * FROM transactions 
+     WHERE user_id=$1 AND created_at > NOW() - INTERVAL '10 minutes'`,
+    [userId]
   );
 
-    res.json({
-      profile:
-        profile.rows[0],
+  if (recent.rows.length > 10) return true;
+  if (amount > 500000) return true;
 
-      available_tasks:
-        tasks.rows[0].count
-    });
+  return false;
+}
 
-  }
-);
+// ================= REGISTER =================
+router.post("/register", async (req, res) => {
+  const { email, password, referralCode } = req.body;
 
-/* ==========================================
-SOCIAL TASKS
-========================================== */
-router.get(
-"/api/users/tasks",
-auth,
-async(req,res)=>{
+  const hash = await bcrypt.hash(password, 10);
+  const refCode = crypto.randomBytes(3).toString("hex");
 
-    try{
+  const user = await db.query(
+    "INSERT INTO users(email,password,referral_code) VALUES($1,$2,$3) RETURNING *",
+    [email, hash, refCode]
+  );
 
-        const pool =
-        req.app.locals.pool;
+  await db.query(
+    "INSERT INTO wallets(user_id,balance) VALUES($1,0)",
+    [user.rows[0].id]
+  );
 
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT *
-            FROM social_tasks
-            WHERE status='ACTIVE'
-            ORDER BY id DESC
-            `
-
-        );
-
-
-        res.json(
-            result.rows
-        );
-
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-/* ==========================================
-SUBMIT SOCIAL TASK
-========================================== */
-router.post(
-"/api/users/submit-task",
-auth,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-
-        const {
-            task_id,
-            proof
-        } = req.body;
-
-
-        /* STOP DUPLICATE SUBMISSION */
-        const exists =
-        await pool.query(
-
-            `
-            SELECT id
-            FROM submissions
-            WHERE
-            user_id=$1
-            AND task_id=$2
-            `,
-
-            [
-                req.user.id,
-                task_id
-            ]
-
-        );
-
-
-        if(
-            exists.rows.length
-        ){
-
-            return res
-            .status(400)
-            .json({
-                message:
-                "Already submitted"
-            });
-
-        }
-
-
-        /* SAVE PROOF */
-        await pool.query(
-
-            `
-            INSERT INTO submissions
-            (
-                user_id,
-                task_id,
-                proof,
-                status
-            )
-            VALUES
-            (
-                $1,$2,$3,
-                'PENDING'
-            )
-            `,
-
-            [
-                req.user.id,
-                task_id,
-                proof
-            ]
-
-        );
-
-
-        res.json({
-
-            message:
-            "Submitted"
-
-        });
-
-
-    }catch(err){
-
-        res.status(500).json({
-
-            message:
-            err.message
-
-        });
-
-    }
-
-});
-
-/* ==========================================
-WALLET
-========================================== */
-router.get(
-  "/api/users/wallet",
-  auth,
-  async (req, res) => {
-
-    const pool =
-      req.app.locals.pool;
-
-    const result =
-      await pool.query(
-        `
-        SELECT
-        balance,
-        country,
-        referral_code
-        FROM users
-        WHERE id=$1
-        `,
-        [req.user.id]
-      );
-
-
-    res.json(
-      result.rows[0]
+  if (referralCode) {
+    const ref = await db.query(
+      "SELECT id FROM users WHERE referral_code=$1",
+      [referralCode]
     );
 
+    if (ref.rows.length) {
+      await db.query(
+        `INSERT INTO referrals(referrer_id,referred_id,tasks_completed)
+         VALUES($1,$2,0)`,
+        [ref.rows[0].id, user.rows[0].id]
+      );
+    }
   }
-);
 
+  await resend.emails.send({
+    from: "no-reply@yourapp.com",
+    to: email,
+    subject: "Welcome",
+    html: "<h2>Welcome to the platform</h2>",
+  });
 
-/* ==========================================
-WITHDRAW
-========================================== */
-router.post(
-  "/api/users/withdraw",
-  auth,
-  async (req, res) => {
+  const token = jwt.sign({ id: user.rows[0].id }, process.env.JWT_SECRET);
 
-    const pool =
-      req.app.locals.pool;
+  res.json({ token });
+});
 
-    const {
-      amount,
-      bank_name,
-      account_number,
-      account_name,
-      crypto_address,
-      crypto_network
-    } = req.body;
+// ================= LOGIN =================
+router.post("/login", async (req, res) => {
+  const { email, password } = req.body;
 
+  const user = await db.query("SELECT * FROM users WHERE email=$1", [email]);
+  if (!user.rows.length) return res.status(400).json({ msg: "Not found" });
 
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM users
-        WHERE id=$1
-        `,
-        [req.user.id]
+  const ok = await bcrypt.compare(password, user.rows[0].password);
+  if (!ok) return res.status(400).json({ msg: "Wrong password" });
+
+  await resend.emails.send({
+    from: "no-reply@yourapp.com",
+    to: email,
+    subject: "Login Alert",
+    html: "<p>You just logged in</p>",
+  });
+
+  const token = jwt.sign({ id: user.rows[0].id }, process.env.JWT_SECRET);
+  res.json({ token });
+});
+
+// ================= FORGOT PASSWORD =================
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  const code = crypto.randomBytes(3).toString("hex");
+
+  await db.query(
+    "UPDATE users SET reset_code=$1 WHERE email=$2",
+    [code, email]
+  );
+
+  await resend.emails.send({
+    from: "no-reply@yourapp.com",
+    to: email,
+    subject: "Reset Password",
+    html: `<p>Code: <b>${code}</b></p>`,
+  });
+
+  res.json({ msg: "Email sent" });
+});
+
+// ================= RESET PASSWORD =================
+router.post("/reset-password", async (req, res) => {
+  const { email, code, newPassword } = req.body;
+
+  const user = await db.query(
+    "SELECT * FROM users WHERE email=$1 AND reset_code=$2",
+    [email, code]
+  );
+
+  if (!user.rows.length)
+    return res.status(400).json({ msg: "Invalid code" });
+
+  const hash = await bcrypt.hash(newPassword, 10);
+
+  await db.query(
+    "UPDATE users SET password=$1, reset_code=NULL WHERE email=$2",
+    [hash, email]
+  );
+
+  res.json({ msg: "Password updated" });
+});
+
+// ================= PAYSTACK DEPOSIT WEBHOOK =================
+router.post("/paystack/webhook", express.json(), async (req, res) => {
+  const hash = crypto
+    .createHmac("sha512", process.env.PAYSTACK_SECRET)
+    .update(JSON.stringify(req.body))
+    .digest("hex");
+
+  if (hash !== req.headers["x-paystack-signature"]) {
+    return res.status(401).send("Invalid signature");
+  }
+
+  const event = req.body;
+
+  if (event.event === "charge.success") {
+    const ref = event.data.reference;
+    const userId = event.data.metadata.userId;
+    const amount = event.data.amount / 100;
+
+    const exists = await db.query(
+      "SELECT id FROM transactions WHERE reference=$1",
+      [ref]
+    );
+
+    if (exists.rows.length) return res.sendStatus(200);
+
+    if (await isSuspicious(userId, amount)) {
+      await db.query("UPDATE users SET flagged=true WHERE id=$1", [userId]);
+    }
+
+    await db.query("BEGIN");
+
+    try {
+      await db.query(
+        "UPDATE wallets SET balance = balance + $1 WHERE user_id=$2",
+        [amount, userId]
       );
 
-
-    const user =
-      result.rows[0];
-
-
-    const isNG =
-      user.country === "NG";
-
-
-    const min =
-      isNG
-        ? NAIRA_MIN
-        : CRYPTO_MIN;
-
-
-    if (amount < min) {
-
-      return res.status(400).json({
-        message: "Below minimum"
+      await addTransaction({
+        userId,
+        amount,
+        type: "deposit",
+        reference: ref,
       });
 
+      await db.query("COMMIT");
+    } catch {
+      await db.query("ROLLBACK");
     }
+  }
 
+  res.sendStatus(200);
+});
 
-    if (amount > user.balance) {
+// ================= TASK CREATE (1% FEE) =================
+router.post("/task/create", auth, async (req, res) => {
+  const { title, reward, slots } = req.body;
 
-      return res.status(400).json({
-        message: "Insufficient balance"
-      });
+  const total = reward * slots;
+  const fee = total * 0.01;
 
-    }
+  const wallet = await db.query(
+    "SELECT balance FROM wallets WHERE user_id=$1",
+    [req.user.id]
+  );
 
+  if (wallet.rows[0].balance < total)
+    return res.status(400).json({ msg: "Insufficient balance" });
 
-    const fee =
-      amount *
-      FEE_PERCENT /
-      100;
+  await db.query("BEGIN");
 
-
-    await pool.query(
-      `
-      INSERT INTO withdrawals
-      (
-        user_id,
-        amount,
-        fee,
-        type,
-        bank_name,
-        account_number,
-        account_name,
-        crypto_address,
-        crypto_network,
-        status
-      )
-      VALUES
-      (
-        $1,$2,$3,$4,
-        $5,$6,$7,
-        $8,$9,
-        'PENDING'
-      )
-      `,
-      [
-        req.user.id,
-        amount,
-        fee,
-
-        isNG
-          ? "BANK"
-          : "CRYPTO",
-
-        bank_name || null,
-        account_number || null,
-        account_name || null,
-
-        crypto_address || null,
-        crypto_network || null
-      ]
+  try {
+    await db.query(
+      "UPDATE wallets SET balance = balance - $1 WHERE user_id=$2",
+      [total, req.user.id]
     );
 
-
-    await pool.query(
-      `
-      UPDATE users
-      SET balance=balance-$1
-      WHERE id=$2
-      `,
-      [
-        amount,
-        req.user.id
-      ]
-    );
-
-
-    res.json({
-      message:
-        "Withdrawal submitted"
+    await addTransaction({
+      userId: req.user.id,
+      amount: -total,
+      type: "task_funding",
+      reference: crypto.randomUUID(),
     });
 
+    const task = await db.query(
+      `INSERT INTO tasks(title,reward,slots,creator_id)
+       VALUES($1,$2,$3,$4) RETURNING *`,
+      [title, reward, slots, req.user.id]
+    );
+
+    await db.query("COMMIT");
+
+    res.json({ task, fee });
+  } catch {
+    await db.query("ROLLBACK");
   }
-);
-/* ==========================================
-TRANSACTIONS
-========================================== */
-router.get(
-  "/api/users/transactions",
-  auth,
-  async (req, res) => {
+});
 
-    const pool =
-      req.app.locals.pool;
+// ================= SUBMIT TASK =================
+router.post("/task/submit", auth, async (req, res) => {
+  const { taskId, proof } = req.body;
 
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM transactions
-        WHERE user_id=$1
-        ORDER BY id DESC
-        `,
-        [req.user.id]
+  if (!proof.startsWith("data:image"))
+    return res.status(400).json({ msg: "Invalid proof" });
+
+  const exists = await db.query(
+    "SELECT id FROM task_submissions WHERE task_id=$1 AND user_id=$2",
+    [taskId, req.user.id]
+  );
+
+  if (exists.rows.length)
+    return res.status(400).json({ msg: "Already submitted" });
+
+  await db.query(
+    `INSERT INTO task_submissions(task_id,user_id,proof,status)
+     VALUES($1,$2,$3,'pending')`,
+    [taskId, req.user.id, proof]
+  );
+
+  res.json({ msg: "Submitted" });
+});
+
+// ================= APPROVE TASK =================
+router.post("/task/approve", auth, async (req, res) => {
+  const { submissionId } = req.body;
+
+  const sub = await db.query(
+    "SELECT * FROM task_submissions WHERE id=$1",
+    [submissionId]
+  );
+
+  const task = await db.query(
+    "SELECT * FROM tasks WHERE id=$1",
+    [sub.rows[0].task_id]
+  );
+
+  if (task.rows[0].creator_id !== req.user.id)
+    return res.status(403).json({ msg: "Not allowed" });
+
+  await db.query("BEGIN");
+
+  try {
+    await db.query(
+      "UPDATE wallets SET balance = balance + $1 WHERE user_id=$2",
+      [task.rows[0].reward, sub.rows[0].user_id]
+    );
+
+    await db.query(
+      "UPDATE task_submissions SET status='approved' WHERE id=$1",
+      [submissionId]
+    );
+
+    // referral logic (₦200 after 2 tasks)
+    const ref = await db.query(
+      "SELECT * FROM referrals WHERE referred_id=$1",
+      [sub.rows[0].user_id]
+    );
+
+    if (ref.rows.length) {
+      await db.query(
+        "UPDATE referrals SET tasks_completed = tasks_completed + 1 WHERE referred_id=$1",
+        [sub.rows[0].user_id]
       );
 
-    res.json(
-      result.rows
-    );
-
-  }
-);
-/* ==========================================
-NOTIFICATIONS
-========================================== */
-router.get(
-  "/api/users/notifications",
-  auth,
-  async (req, res) => {
-
-    const pool =
-      req.app.locals.pool;
-
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM notifications
-        WHERE user_id=$1
-        ORDER BY id DESC
-        `,
-        [req.user.id]
+      const updated = await db.query(
+        "SELECT tasks_completed FROM referrals WHERE referred_id=$1",
+        [sub.rows[0].user_id]
       );
 
-    res.json(
-      result.rows
-    );
+      if (updated.rows[0].tasks_completed === 2) {
+        await db.query(
+          "UPDATE wallets SET balance = balance + 200 WHERE user_id=$1",
+          [ref.rows[0].referrer_id]
+        );
+      }
+    }
 
+    await db.query("COMMIT");
+
+    res.json({ msg: "Approved" });
+  } catch {
+    await db.query("ROLLBACK");
   }
-);
-
-/* ==========================================
-REFERRALS
-========================================== */
-router.get(
-  "/api/users/referrals",
-  auth,
-  async (req, res) => {
-
-    const pool = req.app.locals.pool;
-
-    const result = await pool.query(
-      `
-      SELECT
-      u.name,
-      r.amount,
-      r.currency,
-      r.status,
-      r.created_at
-      FROM referral_earnings r
-      JOIN users u
-      ON u.id = r.referred_user_id
-      WHERE r.referrer_id=$1
-      ORDER BY r.id DESC
-      `,
-      [req.user.id]
-    );
-
-    res.json(result.rows);
-
-  }
-);
-
-router.get(
-"/api/users/freelance-jobs",
-auth,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT *
-            FROM freelance_jobs
-            WHERE status='ACTIVE'
-            ORDER BY id DESC
-            `
-
-        );
-
-        res.json(
-            result.rows
-        );
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
 });
 
-router.get(
-"/api/users/hiring-jobs",
-auth,
-async(req,res)=>{
+// ================= WALLET =================
+router.get("/wallet", auth, async (req, res) => {
+  const w = await db.query(
+    "SELECT balance FROM wallets WHERE user_id=$1",
+    [req.user.id]
+  );
 
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT *
-            FROM hiring_jobs
-            WHERE status='ACTIVE'
-            ORDER BY id DESC
-            `
-
-        );
-
-        res.json(
-            result.rows
-        );
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
+  res.json(w.rows[0]);
 });
 
-router.get(
-"/api/users/influencer-jobs",
-auth,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT *
-            FROM influencer_jobs
-            WHERE status='ACTIVE'
-            ORDER BY id DESC
-            `
-
-        );
-
-        res.json(
-            result.rows
-        );
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-router.post(
-"/api/users/apply-freelance",
-auth,
-async(req,res)=>{
-
-    const pool =
-    req.app.locals.pool;
-
-    const client =
-    await pool.connect();
-
-    try{
-
-        await client.query(
-            "BEGIN"
-        );
-
-
-        const {
-            job_id,
-            proposal
-        } = req.body;
-
-
-        if(
-            !job_id ||
-            !proposal
-        ){
-
-            throw new Error(
-                "Missing fields"
-            );
-
-        }
-
-
-        const job =
-        await client.query(
-
-            `
-            SELECT *
-            FROM freelance_jobs
-            WHERE
-            id=$1
-            AND status='ACTIVE'
-            `,
-
-            [job_id]
-
-        );
-
-
-        if(
-            !job.rows.length
-        ){
-
-            throw new Error(
-                "Job not found"
-            );
-
-        }
-
-
-        const vendorId =
-        job.rows[0]
-        .vendor_id;
-
-
-        const exists =
-        await client.query(
-
-            `
-            SELECT id
-            FROM freelance_applications
-            WHERE
-            user_id=$1
-            AND job_id=$2
-            `,
-
-            [
-                req.user.id,
-                job_id
-            ]
-
-        );
-
-
-        if(
-            exists.rows.length
-        ){
-
-            throw new Error(
-                "Already applied"
-            );
-
-        }
-
-
-        await client.query(
-
-            `
-            INSERT INTO
-            freelance_applications
-            (
-                user_id,
-                vendor_id,
-                job_id,
-                proposal,
-                status
-            )
-            VALUES
-            (
-                $1,$2,$3,$4,
-                'PENDING'
-            )
-            `,
-
-            [
-
-                req.user.id,
-                vendorId,
-                job_id,
-                proposal
-
-            ]
-
-        );
-
-
-        await client.query(
-
-            `
-            INSERT INTO
-            notifications
-            (
-                vendor_id,
-                title,
-                message,
-                is_read
-            )
-            VALUES
-            (
-                $1,
-                'New Freelance Application',
-                'A user applied for your freelance job',
-                false
-            )
-            `,
-
-            [vendorId]
-
-        );
-
-
-        await client.query(
-            "COMMIT"
-        );
-
-
-        res.json({
-
-            message:
-            "Application sent"
-
-        });
-
-    }catch(err){
-
-        await client.query(
-            "ROLLBACK"
-        );
-
-        res
-        .status(400)
-        .json({
-
-            message:
-            err.message
-
-        });
-
-    }finally{
-
-        client.release();
-
-    }
-
-});
-
-router.post(
-"/api/users/apply-hiring",
-auth,
-async(req,res)=>{
-
-    const pool =
-    req.app.locals.pool;
-
-    const client =
-    await pool.connect();
-
-    try{
-
-        await client.query(
-            "BEGIN"
-        );
-
-
-        const {
-            job_id,
-            cv_link
-        } = req.body;
-
-
-        if(
-            !job_id ||
-            !cv_link
-        ){
-
-            throw new Error(
-                "Missing fields"
-            );
-
-        }
-
-
-        const job =
-        await client.query(
-
-            `
-            SELECT *
-            FROM hiring_jobs
-            WHERE
-            id=$1
-            AND status='ACTIVE'
-            `,
-
-            [job_id]
-
-        );
-
-
-        if(
-            !job.rows.length
-        ){
-
-            throw new Error(
-                "Job not found"
-            );
-
-        }
-
-
-        const vendorId =
-        job.rows[0]
-        .vendor_id;
-
-
-        const exists =
-        await client.query(
-
-            `
-            SELECT id
-            FROM hiring_applications
-            WHERE
-            user_id=$1
-            AND job_id=$2
-            `,
-
-            [
-                req.user.id,
-                job_id
-            ]
-
-        );
-
-
-        if(
-            exists.rows.length
-        ){
-
-            throw new Error(
-                "Already applied"
-            );
-
-        }
-
-
-        await client.query(
-
-            `
-            INSERT INTO
-            hiring_applications
-            (
-                user_id,
-                vendor_id,
-                job_id,
-                cv_link,
-                status
-            )
-            VALUES
-            (
-                $1,$2,$3,$4,
-                'PENDING'
-            )
-            `,
-
-            [
-
-                req.user.id,
-                vendorId,
-                job_id,
-                cv_link
-
-            ]
-
-        );
-
-
-        await client.query(
-
-            `
-            INSERT INTO
-            notifications
-            (
-                vendor_id,
-                title,
-                message,
-                is_read
-            )
-            VALUES
-            (
-                $1,
-                'New Hiring Application',
-                'A user submitted a CV',
-                false
-            )
-            `,
-
-            [vendorId]
-
-        );
-
-
-        await client.query(
-            "COMMIT"
-        );
-
-
-        res.json({
-
-            message:
-            "Application sent"
-
-        });
-
-    }catch(err){
-
-        await client.query(
-            "ROLLBACK"
-        );
-
-        res
-        .status(400)
-        .json({
-
-            message:
-            err.message
-
-        });
-
-    }finally{
-
-        client.release();
-
-    }
-
-});
-
-router.post(
-"/api/users/apply-influencer",
-auth,
-async(req,res)=>{
-
-    const pool =
-    req.app.locals.pool;
-
-    const client =
-    await pool.connect();
-
-    try{
-
-        await client.query(
-            "BEGIN"
-        );
-
-
-        const {
-            job_id,
-            portfolio_link
-        } = req.body;
-
-
-        if(
-            !job_id ||
-            !portfolio_link
-        ){
-
-            throw new Error(
-                "Missing fields"
-            );
-
-        }
-
-
-        const job =
-        await client.query(
-
-            `
-            SELECT *
-            FROM influencer_jobs
-            WHERE
-            id=$1
-            AND status='ACTIVE'
-            `,
-
-            [job_id]
-
-        );
-
-
-        if(
-            !job.rows.length
-        ){
-
-            throw new Error(
-                "Job not found"
-            );
-
-        }
-
-
-        const vendorId =
-        job.rows[0]
-        .vendor_id;
-
-
-        const exists =
-        await client.query(
-
-            `
-            SELECT id
-            FROM influencer_applications
-            WHERE
-            user_id=$1
-            AND job_id=$2
-            `,
-
-            [
-                req.user.id,
-                job_id
-            ]
-
-        );
-
-
-        if(
-            exists.rows.length
-        ){
-
-            throw new Error(
-                "Already applied"
-            );
-
-        }
-
-
-        await client.query(
-
-            `
-            INSERT INTO
-            influencer_applications
-            (
-                user_id,
-                vendor_id,
-                job_id,
-                portfolio_link,
-                status
-            )
-            VALUES
-            (
-                $1,$2,$3,$4,
-                'PENDING'
-            )
-            `,
-
-            [
-
-                req.user.id,
-                vendorId,
-                job_id,
-                portfolio_link
-
-            ]
-
-        );
-
-
-        await client.query(
-
-            `
-            INSERT INTO
-            notifications
-            (
-                vendor_id,
-                title,
-                message,
-                is_read
-            )
-            VALUES
-            (
-                $1,
-                'New Influencer Application',
-                'A creator submitted a portfolio',
-                false
-            )
-            `,
-
-            [vendorId]
-
-        );
-
-
-        await client.query(
-            "COMMIT"
-        );
-
-
-        res.json({
-
-            message:
-            "Application sent"
-
-        });
-
-    }catch(err){
-
-        await client.query(
-            "ROLLBACK"
-        );
-
-        res
-        .status(400)
-        .json({
-
-            message:
-            err.message
-
-        });
-
-    }finally{
-
-        client.release();
-
-    }
-
+// ================= WITHDRAW (MANUAL + 0.75% FEE) =================
+router.post("/withdraw", auth, async (req, res) => {
+  const { amount } = req.body;
+
+  const fee = amount * 0.0075;
+  const total = amount + fee;
+
+  const wallet = await db.query(
+    "SELECT balance FROM wallets WHERE user_id=$1",
+    [req.user.id]
+  );
+
+  if (wallet.rows[0].balance < total)
+    return res.status(400).json({ msg: "Insufficient balance" });
+
+  await db.query(
+    "UPDATE wallets SET balance = balance - $1 WHERE user_id=$2",
+    [total, req.user.id]
+  );
+
+  await addTransaction({
+    userId: req.user.id,
+    amount: -total,
+    type: "withdrawal",
+    reference: crypto.randomUUID(),
+  });
+
+  res.json({
+    msg: "Withdrawal submitted (manual review)",
+    fee,
+    net: amount,
+  });
 });
 
 module.exports = router;
