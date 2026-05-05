@@ -1093,50 +1093,185 @@ router.post(
 auth,
 async(req,res)=>{
 
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
     try{
 
-        const pool =
-        req.app.locals.pool;
+        await client.query(
+            "BEGIN"
+        );
+
 
         const {
             job_id,
             proposal
         } = req.body;
 
-        await pool.query(
+
+        if(
+            !job_id ||
+            !proposal
+        ){
+
+            throw new Error(
+                "Missing fields"
+            );
+
+        }
+
+
+        const job =
+        await client.query(
 
             `
-            INSERT INTO freelance_applications
+            SELECT *
+            FROM freelance_jobs
+            WHERE
+            id=$1
+            AND status='ACTIVE'
+            `,
+
+            [job_id]
+
+        );
+
+
+        if(
+            !job.rows.length
+        ){
+
+            throw new Error(
+                "Job not found"
+            );
+
+        }
+
+
+        const vendorId =
+        job.rows[0]
+        .vendor_id;
+
+
+        const exists =
+        await client.query(
+
+            `
+            SELECT id
+            FROM freelance_applications
+            WHERE
+            user_id=$1
+            AND job_id=$2
+            `,
+
+            [
+                req.user.id,
+                job_id
+            ]
+
+        );
+
+
+        if(
+            exists.rows.length
+        ){
+
+            throw new Error(
+                "Already applied"
+            );
+
+        }
+
+
+        await client.query(
+
+            `
+            INSERT INTO
+            freelance_applications
             (
                 user_id,
+                vendor_id,
                 job_id,
                 proposal,
                 status
             )
             VALUES
             (
-                $1,$2,$3,
+                $1,$2,$3,$4,
                 'PENDING'
             )
             `,
 
             [
+
                 req.user.id,
+                vendorId,
                 job_id,
                 proposal
+
             ]
 
         );
 
+
+        await client.query(
+
+            `
+            INSERT INTO
+            notifications
+            (
+                vendor_id,
+                title,
+                message,
+                is_read
+            )
+            VALUES
+            (
+                $1,
+                'New Freelance Application',
+                'A user applied for your freelance job',
+                false
+            )
+            `,
+
+            [vendorId]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
         res.json({
-            message:"Applied"
+
+            message:
+            "Application sent"
+
         });
 
     }catch(err){
 
-        res.status(500).json({
-            message:err.message
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res
+        .status(400)
+        .json({
+
+            message:
+            err.message
+
         });
+
+    }finally{
+
+        client.release();
 
     }
 
@@ -1147,50 +1282,185 @@ router.post(
 auth,
 async(req,res)=>{
 
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
     try{
 
-        const pool =
-        req.app.locals.pool;
+        await client.query(
+            "BEGIN"
+        );
+
 
         const {
             job_id,
             cv_link
         } = req.body;
 
-        await pool.query(
+
+        if(
+            !job_id ||
+            !cv_link
+        ){
+
+            throw new Error(
+                "Missing fields"
+            );
+
+        }
+
+
+        const job =
+        await client.query(
 
             `
-            INSERT INTO hiring_applications
+            SELECT *
+            FROM hiring_jobs
+            WHERE
+            id=$1
+            AND status='ACTIVE'
+            `,
+
+            [job_id]
+
+        );
+
+
+        if(
+            !job.rows.length
+        ){
+
+            throw new Error(
+                "Job not found"
+            );
+
+        }
+
+
+        const vendorId =
+        job.rows[0]
+        .vendor_id;
+
+
+        const exists =
+        await client.query(
+
+            `
+            SELECT id
+            FROM hiring_applications
+            WHERE
+            user_id=$1
+            AND job_id=$2
+            `,
+
+            [
+                req.user.id,
+                job_id
+            ]
+
+        );
+
+
+        if(
+            exists.rows.length
+        ){
+
+            throw new Error(
+                "Already applied"
+            );
+
+        }
+
+
+        await client.query(
+
+            `
+            INSERT INTO
+            hiring_applications
             (
                 user_id,
+                vendor_id,
                 job_id,
                 cv_link,
                 status
             )
             VALUES
             (
-                $1,$2,$3,
+                $1,$2,$3,$4,
                 'PENDING'
             )
             `,
 
             [
+
                 req.user.id,
+                vendorId,
                 job_id,
                 cv_link
+
             ]
 
         );
 
+
+        await client.query(
+
+            `
+            INSERT INTO
+            notifications
+            (
+                vendor_id,
+                title,
+                message,
+                is_read
+            )
+            VALUES
+            (
+                $1,
+                'New Hiring Application',
+                'A user submitted a CV',
+                false
+            )
+            `,
+
+            [vendorId]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
         res.json({
-            message:"Application sent"
+
+            message:
+            "Application sent"
+
         });
 
     }catch(err){
 
-        res.status(500).json({
-            message:err.message
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res
+        .status(400)
+        .json({
+
+            message:
+            err.message
+
         });
+
+    }finally{
+
+        client.release();
 
     }
 
@@ -1201,53 +1471,188 @@ router.post(
 auth,
 async(req,res)=>{
 
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
     try{
 
-        const pool =
-        req.app.locals.pool;
+        await client.query(
+            "BEGIN"
+        );
+
 
         const {
             job_id,
             portfolio_link
         } = req.body;
 
-        await pool.query(
+
+        if(
+            !job_id ||
+            !portfolio_link
+        ){
+
+            throw new Error(
+                "Missing fields"
+            );
+
+        }
+
+
+        const job =
+        await client.query(
 
             `
-            INSERT INTO influencer_applications
+            SELECT *
+            FROM influencer_jobs
+            WHERE
+            id=$1
+            AND status='ACTIVE'
+            `,
+
+            [job_id]
+
+        );
+
+
+        if(
+            !job.rows.length
+        ){
+
+            throw new Error(
+                "Job not found"
+            );
+
+        }
+
+
+        const vendorId =
+        job.rows[0]
+        .vendor_id;
+
+
+        const exists =
+        await client.query(
+
+            `
+            SELECT id
+            FROM influencer_applications
+            WHERE
+            user_id=$1
+            AND job_id=$2
+            `,
+
+            [
+                req.user.id,
+                job_id
+            ]
+
+        );
+
+
+        if(
+            exists.rows.length
+        ){
+
+            throw new Error(
+                "Already applied"
+            );
+
+        }
+
+
+        await client.query(
+
+            `
+            INSERT INTO
+            influencer_applications
             (
                 user_id,
+                vendor_id,
                 job_id,
                 portfolio_link,
                 status
             )
             VALUES
             (
-                $1,$2,$3,
+                $1,$2,$3,$4,
                 'PENDING'
             )
             `,
 
             [
+
                 req.user.id,
+                vendorId,
                 job_id,
                 portfolio_link
+
             ]
 
         );
 
+
+        await client.query(
+
+            `
+            INSERT INTO
+            notifications
+            (
+                vendor_id,
+                title,
+                message,
+                is_read
+            )
+            VALUES
+            (
+                $1,
+                'New Influencer Application',
+                'A creator submitted a portfolio',
+                false
+            )
+            `,
+
+            [vendorId]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
         res.json({
-            message:"Application sent"
+
+            message:
+            "Application sent"
+
         });
 
     }catch(err){
 
-        res.status(500).json({
-            message:err.message
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res
+        .status(400)
+        .json({
+
+            message:
+            err.message
+
         });
+
+    }finally{
+
+        client.release();
 
     }
 
-});          
+});
 
 module.exports = router;
