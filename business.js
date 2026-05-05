@@ -185,10 +185,18 @@ router.post(
 "/api/business/register",
 async(req,res)=>{
 
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
     try{
 
-        const pool =
-        req.app.locals.pool;
+        await client.query(
+            "BEGIN"
+        );
+
 
         const {
             business_name,
@@ -204,6 +212,10 @@ async(req,res)=>{
             !password
         ){
 
+            await client.query(
+                "ROLLBACK"
+            );
+
             return res
             .status(400)
             .json({
@@ -214,7 +226,7 @@ async(req,res)=>{
 
 
         const exists =
-        await pool.query(
+        await client.query(
 
             `
             SELECT id
@@ -230,6 +242,10 @@ async(req,res)=>{
         if(
             exists.rows.length
         ){
+
+            await client.query(
+                "ROLLBACK"
+            );
 
             return res
             .status(400)
@@ -254,7 +270,8 @@ async(req,res)=>{
         ).toString();
 
 
-        await pool.query(
+        const vendor =
+        await client.query(
 
             `
             INSERT INTO vendors
@@ -274,8 +291,10 @@ async(req,res)=>{
                 false,
                 false,
                 $5,
-                NOW()+INTERVAL '10 minutes'
+                NOW()+INTERVAL
+                '10 minutes'
             )
+            RETURNING id
             `,
 
             [
@@ -289,6 +308,80 @@ async(req,res)=>{
         );
 
 
+        const vendorId =
+        vendor.rows[0].id;
+
+
+        await client.query(
+
+            `
+            INSERT INTO business_wallets
+            (
+                vendor_id,
+                balance,
+                currency
+            )
+            VALUES
+            (
+                $1,
+                0,
+                $2
+            )
+            `,
+
+            [
+
+                vendorId,
+
+                country === "NG"
+                ? "NGN"
+                : "USD"
+
+            ]
+
+        );
+
+
+        await client.query(
+
+            `
+            INSERT INTO business_transactions
+            (
+                vendor_id,
+                amount,
+                type,
+                method,
+                reference,
+                status
+            )
+            VALUES
+            (
+                $1,
+                0,
+                'ACCOUNT_CREATED',
+                'SYSTEM',
+                $2,
+                'SUCCESS'
+            )
+            `,
+
+            [
+
+                vendorId,
+
+                "ACC_" +
+                vendorId
+
+            ]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
         await sendOTP(
             email,
             otp
@@ -296,17 +389,552 @@ async(req,res)=>{
 
 
         res.json({
-            message:"OTP sent"
+
+            message:
+            "OTP sent"
+
         });
 
 
     }catch(err){
 
+        await client.query(
+            "ROLLBACK"
+        );
+
         res
         .status(500)
         .json({
+
+            message:
+            err.message
+
+        });
+
+    }finally{
+
+        client.release();
+
+    }
+
+});
+
+router.get(
+"/api/business/wallet",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+
+        const result =
+        await pool.query(
+            `
+            SELECT *
+            FROM business_wallets
+            WHERE vendor_id=$1
+            `,
+            [req.user.id]
+        );
+
+
+        res.json(
+            result.rows[0]
+        );
+
+    }catch(err){
+
+        res.status(500).json({
             message:err.message
         });
+
+    }
+
+});
+
+const axios = require("axios");
+const crypto = require("crypto");
+
+
+router.post(
+"/api/business/fund-wallet/paystack",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const {
+            amount
+        } = req.body;
+
+
+        const reference =
+        "BW_" +
+        Date.now() +
+        "_" +
+        req.user.id;
+
+
+        const paystack =
+        await axios.post(
+
+            "https://api.paystack.co/transaction/initialize",
+
+            {
+
+                email:req.user.email,
+
+                amount:
+                Number(amount) * 100,
+
+                reference
+
+            },
+
+            {
+
+                headers:{
+
+                    Authorization:
+                    `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+
+                }
+
+            }
+
+        );
+
+
+        res.json({
+
+            reference,
+
+            authorization_url:
+            paystack.data
+            .data
+            .authorization_url
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+
+            message:err.message
+
+        });
+
+    }
+
+});
+
+router.post(
+"/api/business/paystack/webhook",
+express.raw({
+    type:"application/json"
+}),
+async(req,res)=>{
+
+    const signature =
+    req.headers["x-paystack-signature"];
+
+
+    const hash =
+    crypto
+    .createHmac(
+        "sha512",
+        process.env.PAYSTACK_SECRET_KEY
+    )
+    .update(req.body)
+    .digest("hex");
+
+
+    if(hash !== signature){
+
+        return res
+        .status(401)
+        .end();
+
+    }
+
+
+    const event =
+    JSON.parse(
+        req.body.toString()
+    );
+
+
+    if(
+        event.event !==
+        "charge.success"
+    ){
+
+        return res
+        .sendStatus(200);
+
+    }
+
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const data =
+    event.data;
+
+
+    const reference =
+    data.reference;
+
+
+    const amount =
+    Number(
+        data.amount
+    ) / 100;
+
+
+    const vendorId =
+    Number(
+        reference
+        .split("_")[2]
+    );
+
+
+    try{
+
+        const exists =
+        await pool.query(
+
+            `
+            SELECT id
+            FROM business_transactions
+            WHERE reference=$1
+            `,
+
+            [reference]
+
+        );
+
+
+        if(
+            exists.rows.length
+        ){
+
+            return res
+            .sendStatus(200);
+
+        }
+
+
+        await pool.query("BEGIN");
+
+
+        await pool.query(
+
+            `
+            UPDATE business_wallets
+            SET balance=
+            balance+$1
+            WHERE vendor_id=$2
+            `,
+
+            [
+                amount,
+                vendorId
+            ]
+
+        );
+
+
+        await pool.query(
+
+            `
+            INSERT INTO business_transactions
+            (
+                vendor_id,
+                amount,
+                type,
+                method,
+                reference,
+                status
+            )
+            VALUES
+            (
+                $1,$2,
+                'FUND',
+                'PAYSTACK',
+                $3,
+                'SUCCESS'
+            )
+            `,
+
+            [
+                vendorId,
+                amount,
+                reference
+            ]
+
+        );
+
+
+        await pool.query(
+            "COMMIT"
+        );
+
+
+        res.sendStatus(200);
+
+    }catch(err){
+
+        await pool.query(
+            "ROLLBACK"
+        );
+
+        res.sendStatus(500);
+
+    }
+
+});
+
+router.post(
+"/api/business/fund-wallet/crypto",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const axios =
+        require("axios");
+
+        const {
+            amount,
+            coin
+        } = req.body;
+
+
+        const reference =
+        "BC_" +
+        Date.now() +
+        "_" +
+        req.user.id;
+
+
+        const payment =
+        await axios.post(
+
+            "https://api.nowpayments.io/v1/payment",
+
+            {
+
+                price_amount:amount,
+                price_currency:"usd",
+
+                pay_currency:
+                coin.toLowerCase(),
+
+                order_id:
+                reference
+
+            },
+
+            {
+
+                headers:{
+
+                    "x-api-key":
+                    process.env
+                    .NOWPAYMENTS_API_KEY
+
+                }
+
+            }
+
+        );
+
+
+        res.json({
+
+            reference,
+
+            wallet_address:
+            payment.data
+            .pay_address,
+
+            amount:
+            payment.data
+            .pay_amount,
+
+            coin:
+            payment.data
+            .pay_currency
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
+
+router.post(
+"/api/business/crypto/webhook",
+express.json(),
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+
+        const event =
+        req.body;
+
+
+        const secret =
+        req.headers[
+            "x-nowpayments-sig"
+        ];
+
+
+        if(!secret){
+
+            return res
+            .status(401)
+            .end();
+
+        }
+
+
+        if(
+            event.payment_status !==
+            "finished"
+        ){
+
+            return res
+            .sendStatus(200);
+
+        }
+
+
+        const reference =
+        event.order_id;
+
+
+        const amount =
+        Number(
+            event.price_amount
+        );
+
+
+        const vendorId =
+        Number(
+            reference
+            .split("_")[2]
+        );
+
+
+        const exists =
+        await pool.query(
+
+            `
+            SELECT id
+            FROM business_transactions
+            WHERE reference=$1
+            `,
+
+            [reference]
+
+        );
+
+
+        if(
+            exists.rows.length
+        ){
+
+            return res
+            .sendStatus(200);
+
+        }
+
+
+        await pool.query(
+            "BEGIN"
+        );
+
+
+        await pool.query(
+
+            `
+            UPDATE business_wallets
+            SET balance=
+            balance+$1
+            WHERE vendor_id=$2
+            `,
+
+            [
+                amount,
+                vendorId
+            ]
+
+        );
+
+
+        await pool.query(
+
+            `
+            INSERT INTO business_transactions
+            (
+                vendor_id,
+                amount,
+                type,
+                method,
+                reference,
+                status
+            )
+            VALUES
+            (
+                $1,$2,
+                'FUND',
+                'CRYPTO',
+                $3,
+                'SUCCESS'
+            )
+            `,
+
+            [
+                vendorId,
+                amount,
+                reference
+            ]
+
+        );
+
+
+        await pool.query(
+            "COMMIT"
+        );
+
+
+        res.sendStatus(200);
+
+    }catch(err){
+
+        await pool.query(
+            "ROLLBACK"
+        );
+
+        res.sendStatus(500);
 
     }
 
