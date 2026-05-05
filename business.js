@@ -1406,11 +1406,102 @@ async(req,res)=>{
 
         );
 
+router.post(
+"/api/business/approve-submission",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
+    try{
+
+        await client.query(
+            "BEGIN"
+        );
+
+
+        const sub =
+        await client.query(
+
+            `
+            SELECT
+
+            s.*,
+
+            t.vendor_id,
+
+            t.reward,
+
+            t.title
+
+            FROM submissions s
+
+            JOIN social_tasks t
+            ON t.id=s.task_id
+
+            WHERE s.id=$1
+
+            FOR UPDATE
+            `,
+
+            [
+                req.body.submission_id
+            ]
+
+        );
+
+
+        if(
+            !sub.rows.length
+        ){
+
+            throw new Error(
+                "Submission not found"
+            );
+
+        }
+
+
+        const submission =
+        sub.rows[0];
+
+
+        if(
+
+            submission.vendor_id !==
+            req.user.id
+
+        ){
+
+            throw new Error(
+                "Unauthorized"
+            );
+
+        }
+
+
+        if(
+
+            submission.status !==
+            "PENDING"
+
+        ){
+
+            throw new Error(
+                "Already reviewed"
+            );
+
+        }
+
 
         const reward =
         Number(
-            task.rows[0]
-            .reward
+            submission.reward
         );
 
 
@@ -1447,6 +1538,8 @@ async(req,res)=>{
         }
 
 
+        /* PAY USER */
+
         await client.query(
 
             `
@@ -1457,12 +1550,17 @@ async(req,res)=>{
             `,
 
             [
+
                 reward,
+
                 submission.user_id
+
             ]
 
         );
 
+
+        /* DEDUCT ESCROW */
 
         await client.query(
 
@@ -1474,12 +1572,17 @@ async(req,res)=>{
             `,
 
             [
+
                 reward,
+
                 submission.task_id
+
             ]
 
         );
 
+
+        /* APPROVE */
 
         await client.query(
 
@@ -1490,7 +1593,74 @@ async(req,res)=>{
             `,
 
             [
+
                 submission.id
+
+            ]
+
+        );
+
+
+        /* TRANSACTION */
+
+        await client.query(
+
+            `
+            INSERT INTO
+            transactions
+            (
+                user_id,
+                amount,
+                type,
+                reference
+            )
+            VALUES
+            (
+                $1,$2,
+                'TASK_EARNING',
+                $3
+            )
+            `,
+
+            [
+
+                submission.user_id,
+
+                reward,
+
+                "TASK_" +
+                submission.task_id
+
+            ]
+
+        );
+
+
+        /* NOTIFICATION */
+
+        await client.query(
+
+            `
+            INSERT INTO
+            notifications
+            (
+                user_id,
+                message
+            )
+            VALUES
+            (
+                $1,$2
+            )
+            `,
+
+            [
+
+                submission.user_id,
+
+                "Your proof for " +
+                submission.title +
+                " was approved"
+
             ]
 
         );
@@ -1500,9 +1670,14 @@ async(req,res)=>{
             "COMMIT"
         );
 
+
         res.json({
-            message:"Approved"
+
+            message:
+            "Approved"
+
         });
+
 
     }catch(err){
 
@@ -1510,7 +1685,9 @@ async(req,res)=>{
             "ROLLBACK"
         );
 
-        res.status(400).json({
+        res
+        .status(400)
+        .json({
             message:err.message
         });
 
@@ -1521,7 +1698,8 @@ async(req,res)=>{
     }
 
 });
-
+        
+        
 router.post(
 "/api/business/reject-submission",
 auth,
@@ -1530,6 +1708,86 @@ async(req,res)=>{
 
     const pool =
     req.app.locals.pool;
+
+
+    const sub =
+    await pool.query(
+
+        `
+        SELECT
+
+        s.*,
+
+        t.vendor_id,
+
+        t.title
+
+        FROM submissions s
+
+        JOIN social_tasks t
+        ON t.id=s.task_id
+
+        WHERE s.id=$1
+        `,
+
+        [
+            req.body.submission_id
+        ]
+
+    );
+
+
+    if(
+        !sub.rows.length
+    ){
+
+        return res
+        .status(404)
+        .json({
+            message:
+            "Not found"
+        });
+
+    }
+
+
+    const submission =
+    sub.rows[0];
+
+
+    if(
+
+        submission.vendor_id !==
+        req.user.id
+
+    ){
+
+        return res
+        .status(403)
+        .json({
+            message:
+            "Unauthorized"
+        });
+
+    }
+
+
+    if(
+
+        submission.status !==
+        "PENDING"
+
+    ){
+
+        return res
+        .status(400)
+        .json({
+            message:
+            "Already reviewed"
+        });
+
+    }
+
 
     await pool.query(
 
@@ -1540,13 +1798,47 @@ async(req,res)=>{
         `,
 
         [
-            req.body.submission_id
+
+            submission.id
+
         ]
 
     );
 
+
+    await pool.query(
+
+        `
+        INSERT INTO
+        notifications
+        (
+            user_id,
+            message
+        )
+        VALUES
+        (
+            $1,$2
+        )
+        `,
+
+        [
+
+            submission.user_id,
+
+            "Your proof for " +
+            submission.title +
+            " was rejected"
+
+        ]
+
+    );
+
+
     res.json({
-        message:"Rejected"
+
+        message:
+        "Rejected"
+
     });
 
 });
@@ -1706,6 +1998,231 @@ async(req,res)=>{
 });
 
 router.post(
+"/api/business/approve-freelance",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const app =
+    await pool.query(
+
+        `
+        SELECT
+
+        a.*,
+
+        j.vendor_id,
+
+        j.title
+
+        FROM
+        freelance_applications a
+
+        JOIN
+        freelance_jobs j
+
+        ON j.id=a.job_id
+
+        WHERE a.id=$1
+        `,
+
+        [
+            req.body.application_id
+        ]
+
+    );
+
+
+    if(
+        !app.rows.length
+    ){
+
+        return res
+        .status(404)
+        .json({
+            message:"Not found"
+        });
+
+    }
+
+
+    const row =
+    app.rows[0];
+
+
+    if(
+        row.vendor_id !==
+        req.user.id
+    ){
+
+        return res
+        .status(403)
+        .json({
+            message:"Unauthorized"
+        });
+
+    }
+
+
+    if(
+        row.status !==
+        "PENDING"
+    ){
+
+        return res
+        .status(400)
+        .json({
+            message:"Already reviewed"
+        });
+
+    }
+
+
+    await pool.query(
+
+        `
+        UPDATE
+        freelance_applications
+        SET status='APPROVED'
+        WHERE id=$1
+        `,
+
+        [row.id]
+
+    );
+
+
+    await pool.query(
+
+        `
+        INSERT INTO
+        notifications
+        (
+            user_id,
+            message
+        )
+        VALUES
+        (
+            $1,$2
+        )
+        `,
+
+        [
+
+            row.user_id,
+
+            "Your freelance proposal for " +
+            row.title +
+            " was approved"
+
+        ]
+
+    );
+
+
+    res.json({
+        message:"Approved"
+    });
+
+});      
+
+router.post(
+"/api/business/reject-freelance",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const app =
+    await pool.query(
+
+        `
+        SELECT
+
+        a.*,
+
+        j.vendor_id,
+
+        j.title
+
+        FROM
+        freelance_applications a
+
+        JOIN
+        freelance_jobs j
+
+        ON j.id=a.job_id
+
+        WHERE a.id=$1
+        `,
+
+        [
+            req.body.application_id
+        ]
+
+    );
+
+
+    const row =
+    app.rows[0];
+
+
+    await pool.query(
+
+        `
+        UPDATE
+        freelance_applications
+        SET status='REJECTED'
+        WHERE id=$1
+        `,
+
+        [row.id]
+
+    );
+
+
+    await pool.query(
+
+        `
+        INSERT INTO
+        notifications
+        (
+            user_id,
+            message
+        )
+        VALUES
+        (
+            $1,$2
+        )
+        `,
+
+        [
+
+            row.user_id,
+
+            "Your freelance proposal for " +
+            row.title +
+            " was rejected"
+
+        ]
+
+    );
+
+
+    res.json({
+        message:"Rejected"
+    });
+
+});
+
+router.post(
 "/api/business/create-hiring",
 auth,
 businessOnly,
@@ -1846,6 +2363,188 @@ async(req,res)=>{
 
 });
 
+router.post(
+"/api/business/approve-hiring",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const app =
+    await pool.query(
+
+        `
+        SELECT
+
+        a.*,
+
+        j.vendor_id,
+
+        j.title
+
+        FROM
+        hiring_applications a
+
+        JOIN
+        hiring_jobs j
+
+        ON j.id=a.job_id
+
+        WHERE a.id=$1
+        `,
+
+        [
+            req.body.application_id
+        ]
+
+    );
+
+
+    const row =
+    app.rows[0];
+
+
+    await pool.query(
+
+        `
+        UPDATE
+        hiring_applications
+        SET status='APPROVED'
+        WHERE id=$1
+        `,
+
+        [row.id]
+
+    );
+
+
+    await pool.query(
+
+        `
+        INSERT INTO
+        notifications
+        (
+            user_id,
+            message
+        )
+        VALUES
+        (
+            $1,$2
+        )
+        `,
+
+        [
+
+            row.user_id,
+
+            "Your CV for " +
+            row.title +
+            " was approved"
+
+        ]
+
+    );
+
+
+    res.json({
+        message:"Approved"
+    });
+
+});      
+
+router.post(
+"/api/business/reject-hiring",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const app =
+    await pool.query(
+
+        `
+        SELECT
+
+        a.*,
+
+        j.title
+
+        FROM
+        hiring_applications a
+
+        JOIN
+        hiring_jobs j
+
+        ON j.id=a.job_id
+
+        WHERE a.id=$1
+        `,
+
+        [
+            req.body.application_id
+        ]
+
+    );
+
+
+    const row =
+    app.rows[0];
+
+
+    await pool.query(
+
+        `
+        UPDATE
+        hiring_applications
+        SET status='REJECTED'
+        WHERE id=$1
+        `,
+
+        [row.id]
+
+    );
+
+
+    await pool.query(
+
+        `
+        INSERT INTO
+        notifications
+        (
+            user_id,
+            message
+        )
+        VALUES
+        (
+            $1,$2
+        )
+        `,
+
+        [
+
+            row.user_id,
+
+            "Your CV for " +
+            row.title +
+            " was rejected"
+
+        ]
+
+    );
+
+
+    res.json({
+        message:"Rejected"
+    });
+
+});
+        
 router.post(
 "/api/business/create-influencer",
 auth,
@@ -1998,6 +2697,186 @@ async(req,res)=>{
         client.release();
 
     }
+
+});
+
+router.post(
+"/api/business/approve-influencer",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const app =
+    await pool.query(
+
+        `
+        SELECT
+
+        a.*,
+
+        j.title
+
+        FROM
+        influencer_applications a
+
+        JOIN
+        influencer_jobs j
+
+        ON j.id=a.job_id
+
+        WHERE a.id=$1
+        `,
+
+        [
+            req.body.application_id
+        ]
+
+    );
+
+
+    const row =
+    app.rows[0];
+
+
+    await pool.query(
+
+        `
+        UPDATE
+        influencer_applications
+        SET status='APPROVED'
+        WHERE id=$1
+        `,
+
+        [row.id]
+
+    );
+
+
+    await pool.query(
+
+        `
+        INSERT INTO
+        notifications
+        (
+            user_id,
+            message
+        )
+        VALUES
+        (
+            $1,$2
+        )
+        `,
+
+        [
+
+            row.user_id,
+
+            "Your portfolio for " +
+            row.title +
+            " was approved"
+
+        ]
+
+    );
+
+
+    res.json({
+        message:"Approved"
+    });
+
+});
+
+router.post(
+"/api/business/reject-influencer",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const app =
+    await pool.query(
+
+        `
+        SELECT
+
+        a.*,
+
+        j.title
+
+        FROM
+        influencer_applications a
+
+        JOIN
+        influencer_jobs j
+
+        ON j.id=a.job_id
+
+        WHERE a.id=$1
+        `,
+
+        [
+            req.body.application_id
+        ]
+
+    );
+
+
+    const row =
+    app.rows[0];
+
+
+    await pool.query(
+
+        `
+        UPDATE
+        influencer_applications
+        SET status='REJECTED'
+        WHERE id=$1
+        `,
+
+        [row.id]
+
+    );
+
+
+    await pool.query(
+
+        `
+        INSERT INTO
+        notifications
+        (
+            user_id,
+            message
+        )
+        VALUES
+        (
+            $1,$2
+        )
+        `,
+
+        [
+
+            row.user_id,
+
+            "Your portfolio for " +
+            row.title +
+            " was rejected"
+
+        ]
+
+    );
+
+
+    res.json({
+        message:"Rejected"
+    });
 
 });
 
