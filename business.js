@@ -1764,19 +1764,47 @@ async(req,res)=>{
         } = req.body;
 
 
+        /* VALIDATION */
+
+        if(
+
+            !title?.trim() ||
+
+            !description?.trim() ||
+
+            !link?.trim() ||
+
+            !qty ||
+
+            Number(qty) < 1
+
+        ){
+
+            throw new Error(
+                "Missing fields"
+            );
+
+        }
+
+
         const reward =
-        localPrice(
+        Number(
 
-            PRICING
-            .SOCIAL_PER_USER,
+            localPrice(
 
-            req.user.country
+                PRICING
+                .SOCIAL_PER_USER,
+
+                req.user.country
+
+            )
 
         );
 
 
         const total =
-        reward * qty;
+        reward *
+        Number(qty);
 
 
         const wallet =
@@ -1795,10 +1823,23 @@ async(req,res)=>{
 
 
         if(
+            !wallet.rows.length
+        ){
+
+            throw new Error(
+                "Wallet not found"
+            );
+
+        }
+
+
+        if(
 
             Number(
+
                 wallet.rows[0]
                 .balance
+
             ) < total
 
         ){
@@ -1820,8 +1861,11 @@ async(req,res)=>{
             `,
 
             [
+
                 total,
+
                 req.user.id
+
             ]
 
         );
@@ -1854,15 +1898,15 @@ async(req,res)=>{
 
                 req.user.id,
 
-                title,
+                title.trim(),
 
-                description,
+                description.trim(),
 
-                link,
+                link.trim(),
 
                 reward,
 
-                qty
+                Number(qty)
 
             ]
 
@@ -1898,8 +1942,12 @@ async(req,res)=>{
             "COMMIT"
         );
 
+
         res.json({
-            message:"Task created"
+
+            message:
+            "Task created"
+
         });
 
     }catch(err){
@@ -1908,8 +1956,12 @@ async(req,res)=>{
             "ROLLBACK"
         );
 
+
         res.status(400).json({
-            message:err.message
+
+            message:
+            err.message
+
         });
 
     }finally{
@@ -1919,7 +1971,6 @@ async(req,res)=>{
     }
 
 });
-
 
 router.post(
 "/api/business/approve-submission",
@@ -2376,34 +2427,81 @@ async(req,res)=>{
             "BEGIN"
         );
 
-        const {
 
-            title,
-            description,
-            budget
-
-        } = req.body;
+        const title =
+        String(
+            req.body.title || ""
+        ).trim();
 
 
-        const minBudget =
-        localPrice(
-            PRICING.FREELANCE_MIN,
-            req.user.country
+        const description =
+        String(
+            req.body.description || ""
+        ).trim();
+
+
+        const budget =
+        Number(
+            req.body.budget
         );
 
 
+        /* required fields */
         if(
-            Number(budget) <
-            minBudget
+            !title ||
+            !description ||
+            !budget
         ){
 
             throw new Error(
-                "Below minimum"
+                "Please complete all fields"
             );
 
         }
 
 
+        /* number validation */
+        if(
+
+            !Number.isFinite(
+                budget
+            ) ||
+
+            budget <= 0
+
+        ){
+
+            throw new Error(
+                "Invalid budget"
+            );
+
+        }
+
+
+        /* minimum pricing */
+        const minBudget =
+        localPrice(
+
+            PRICING
+            .FREELANCE_MIN,
+
+            req.user.country
+
+        );
+
+
+        if(
+            budget < minBudget
+        ){
+
+            throw new Error(
+                "Budget below minimum"
+            );
+
+        }
+
+
+        /* wallet lock */
         const wallet =
         await client.query(
 
@@ -2419,13 +2517,27 @@ async(req,res)=>{
         );
 
 
+        /* wallet must exist */
         if(
+            !wallet.rows.length
+        ){
 
-            Number(
-                wallet.rows[0]
-                .balance
-            ) < budget
+            throw new Error(
+                "Wallet not found"
+            );
 
+        }
+
+
+        const balance =
+        Number(
+            wallet.rows[0]
+            .balance
+        );
+
+
+        if(
+            balance < budget
         ){
 
             throw new Error(
@@ -2435,10 +2547,12 @@ async(req,res)=>{
         }
 
 
+        /* deduct */
         await client.query(
 
             `
-            UPDATE business_wallets
+            UPDATE
+            business_wallets
             SET balance=
             balance-$1
             WHERE vendor_id=$2
@@ -2452,6 +2566,7 @@ async(req,res)=>{
         );
 
 
+        /* create job */
         await client.query(
 
             `
@@ -2490,8 +2605,12 @@ async(req,res)=>{
             "COMMIT"
         );
 
+
         res.json({
-            message:"Freelance created"
+
+            message:
+            "Freelance created"
+
         });
 
     }catch(err){
@@ -2500,8 +2619,37 @@ async(req,res)=>{
             "ROLLBACK"
         );
 
+
+        const safeMessages = {
+
+            "Please complete all fields":
+            "Please complete all fields",
+
+            "Invalid budget":
+            "Enter valid budget",
+
+            "Budget below minimum":
+            "Budget below minimum",
+
+            "Wallet not found":
+            "Wallet not found",
+
+            "Insufficient wallet":
+            "Insufficient wallet"
+
+        };
+
+
         res.status(400).json({
-            message:err.message
+
+            message:
+
+            safeMessages[
+                err.message
+            ] ||
+
+            "Could not create job"
+
         });
 
     }finally{
@@ -2511,6 +2659,7 @@ async(req,res)=>{
     }
 
 });
+
 
 router.post(
 "/api/business/approve-freelance",
@@ -2755,6 +2904,7 @@ async(req,res)=>{
             "BEGIN"
         );
 
+
         const {
 
             title,
@@ -2763,11 +2913,37 @@ async(req,res)=>{
         } = req.body;
 
 
+
+        /* VALIDATION */
+
+        if(
+
+            !title ||
+            !title.trim() ||
+
+            !description ||
+            !description.trim()
+
+        ){
+
+            throw new Error(
+                "MISSING_FIELDS"
+            );
+
+        }
+
+
+
         const price =
         localPrice(
-            PRICING.HIRING_FIXED,
+
+            PRICING
+            .HIRING_FIXED,
+
             req.user.country
+
         );
+
 
 
         const wallet =
@@ -2785,20 +2961,36 @@ async(req,res)=>{
         );
 
 
+
+        if(
+            !wallet.rows.length
+        ){
+
+            throw new Error(
+                "NO_WALLET"
+            );
+
+        }
+
+
+
         if(
 
             Number(
+
                 wallet.rows[0]
                 .balance
+
             ) < price
 
         ){
 
             throw new Error(
-                "Insufficient wallet"
+                "LOW_BALANCE"
             );
 
         }
+
 
 
         await client.query(
@@ -2811,11 +3003,14 @@ async(req,res)=>{
             `,
 
             [
+
                 price,
                 req.user.id
+
             ]
 
         );
+
 
 
         await client.query(
@@ -2841,9 +3036,9 @@ async(req,res)=>{
 
                 req.user.id,
 
-                title,
+                title.trim(),
 
-                description,
+                description.trim(),
 
                 price
 
@@ -2852,13 +3047,21 @@ async(req,res)=>{
         );
 
 
+
         await client.query(
             "COMMIT"
         );
 
+
+
         res.json({
-            message:"Hiring created"
+
+            message:
+            "Hiring job created"
+
         });
+
+
 
     }catch(err){
 
@@ -2866,9 +3069,36 @@ async(req,res)=>{
             "ROLLBACK"
         );
 
+
+
+        const errors = {
+
+            MISSING_FIELDS:
+            "Complete all fields",
+
+            NO_WALLET:
+            "Wallet not found",
+
+            LOW_BALANCE:
+            "Insufficient wallet"
+
+        };
+
+
+
         res.status(400).json({
-            message:err.message
+
+            message:
+
+            errors[
+                err.message
+            ] ||
+
+            "Could not create hiring job"
+
         });
+
+
 
     }finally{
 
@@ -3078,6 +3308,8 @@ async(req,res)=>{
             "BEGIN"
         );
 
+
+
         const {
 
             title,
@@ -3087,24 +3319,55 @@ async(req,res)=>{
         } = req.body;
 
 
-        const minBudget =
-        localPrice(
-            PRICING
-            .INFLUENCER_MIN,
-            req.user.country
-        );
 
+        /* VALIDATION */
 
         if(
-            Number(budget) <
-            minBudget
+
+            !title ||
+            !title.trim() ||
+
+            !description ||
+            !description.trim() ||
+
+            !budget ||
+            Number(budget) <= 0
+
         ){
 
             throw new Error(
-                "Below minimum"
+                "MISSING_FIELDS"
             );
 
         }
+
+
+
+        const minBudget =
+        localPrice(
+
+            PRICING
+            .INFLUENCER_MIN,
+
+            req.user.country
+
+        );
+
+
+
+        if(
+
+            Number(budget) <
+            minBudget
+
+        ){
+
+            throw new Error(
+                "LOW_BUDGET"
+            );
+
+        }
+
 
 
         const wallet =
@@ -3122,20 +3385,36 @@ async(req,res)=>{
         );
 
 
+
+        if(
+            !wallet.rows.length
+        ){
+
+            throw new Error(
+                "NO_WALLET"
+            );
+
+        }
+
+
+
         if(
 
             Number(
+
                 wallet.rows[0]
                 .balance
-            ) < budget
+
+            ) < Number(budget)
 
         ){
 
             throw new Error(
-                "Insufficient wallet"
+                "LOW_BALANCE"
             );
 
         }
+
 
 
         await client.query(
@@ -3148,11 +3427,14 @@ async(req,res)=>{
             `,
 
             [
+
                 budget,
                 req.user.id
+
             ]
 
         );
+
 
 
         await client.query(
@@ -3178,9 +3460,9 @@ async(req,res)=>{
 
                 req.user.id,
 
-                title,
+                title.trim(),
 
-                description,
+                description.trim(),
 
                 budget
 
@@ -3189,13 +3471,21 @@ async(req,res)=>{
         );
 
 
+
         await client.query(
             "COMMIT"
         );
 
+
+
         res.json({
-            message:"Influencer created"
+
+            message:
+            "Influencer job created"
+
         });
+
+
 
     }catch(err){
 
@@ -3203,9 +3493,39 @@ async(req,res)=>{
             "ROLLBACK"
         );
 
+
+
+        const errors = {
+
+            MISSING_FIELDS:
+            "Complete all fields",
+
+            LOW_BUDGET:
+            "Budget below minimum",
+
+            NO_WALLET:
+            "Wallet not found",
+
+            LOW_BALANCE:
+            "Insufficient wallet"
+
+        };
+
+
+
         res.status(400).json({
-            message:err.message
+
+            message:
+
+            errors[
+                err.message
+            ] ||
+
+            "Could not create influencer job"
+
         });
+
+
 
     }finally{
 
