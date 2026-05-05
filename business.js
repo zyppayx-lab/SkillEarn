@@ -522,6 +522,280 @@ async(req,res)=>{
 
 });
 
+router.get(
+"/api/business/dashboard",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const vendorId =
+        req.user.id;
+
+
+        const wallet =
+        await pool.query(
+
+            `
+            SELECT
+            balance,
+            currency
+            FROM business_wallets
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const funded =
+        await pool.query(
+
+            `
+            SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS total
+            FROM business_transactions
+            WHERE
+            vendor_id=$1
+            AND type='FUND'
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const spent =
+        await pool.query(
+
+            `
+            SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS total
+            FROM payments
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const social =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM social_tasks
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const freelance =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM freelance_jobs
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const hiring =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM hiring_jobs
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const influencer =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM influencer_jobs
+            WHERE vendor_id=$1
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const pending =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM submissions s
+            JOIN social_tasks t
+            ON t.id=s.task_id
+            WHERE
+            t.vendor_id=$1
+            AND s.status='PENDING'
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const approved =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM submissions s
+            JOIN social_tasks t
+            ON t.id=s.task_id
+            WHERE
+            t.vendor_id=$1
+            AND s.status='APPROVED'
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const rejected =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM submissions s
+            JOIN social_tasks t
+            ON t.id=s.task_id
+            WHERE
+            t.vendor_id=$1
+            AND s.status='REJECTED'
+            `,
+
+            [vendorId]
+
+        );
+
+
+        const notifications =
+        await pool.query(
+
+            `
+            SELECT COUNT(*)
+            FROM notifications
+            WHERE
+            vendor_id=$1
+            AND is_read=false
+            `,
+
+            [vendorId]
+
+        );
+
+
+        res.json({
+
+            wallet:
+            wallet.rows[0],
+
+            total_funded:
+            Number(
+                funded.rows[0]
+                .total
+            ),
+
+            total_spent:
+            Number(
+                spent.rows[0]
+                .total
+            ),
+
+            social_tasks:
+            Number(
+                social.rows[0]
+                .count
+            ),
+
+            freelance_jobs:
+            Number(
+                freelance.rows[0]
+                .count
+            ),
+
+            hiring_jobs:
+            Number(
+                hiring.rows[0]
+                .count
+            ),
+
+            influencer_jobs:
+            Number(
+                influencer.rows[0]
+                .count
+            ),
+
+            pending_reviews:
+            Number(
+                pending.rows[0]
+                .count
+            ),
+
+            approved_reviews:
+            Number(
+                approved.rows[0]
+                .count
+            ),
+
+            rejected_reviews:
+            Number(
+                rejected.rows[0]
+                .count
+            ),
+
+            unread_notifications:
+            Number(
+                notifications.rows[0]
+                .count
+            )
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+
+            message:
+            err.message
+
+        });
+
+    }
+
+});
 
 /* ==========================================
 WALLET
@@ -2949,3 +3223,5 @@ async(req,res)=>{
     });
 
 });
+
+module.exports = router;
