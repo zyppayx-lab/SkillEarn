@@ -644,6 +644,41 @@ async(req,res)=>{
         } = req.body;
 
 
+        /* STOP DUPLICATE SUBMISSION */
+        const exists =
+        await pool.query(
+
+            `
+            SELECT id
+            FROM submissions
+            WHERE
+            user_id=$1
+            AND task_id=$2
+            `,
+
+            [
+                req.user.id,
+                task_id
+            ]
+
+        );
+
+
+        if(
+            exists.rows.length
+        ){
+
+            return res
+            .status(400)
+            .json({
+                message:
+                "Already submitted"
+            });
+
+        }
+
+
+        /* SAVE PROOF */
         await pool.query(
 
             `
@@ -671,20 +706,25 @@ async(req,res)=>{
 
 
         res.json({
-            message:"Submitted"
+
+            message:
+            "Submitted"
+
         });
 
 
     }catch(err){
 
         res.status(500).json({
-            message:err.message
+
+            message:
+            err.message
+
         });
 
     }
 
 });
-
 
 /* ==========================================
 WALLET
