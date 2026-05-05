@@ -6,6 +6,8 @@ console.log("🔥 BUSINESS ROUTES LOADED");
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const axios = require("axios");
 const { Resend } = require("resend");
 
 const router = express.Router();
@@ -48,17 +50,22 @@ function auth(req,res,next){
 }
 
 
-function businessOnly(req,res,next){
+function businessOnly(
+    req,
+    res,
+    next
+){
 
     if(
-        req.user.role !== "vendor" &&
-        req.user.role !== "admin"
+        req.user.role !==
+        "vendor"
     ){
 
         return res
         .status(403)
         .json({
-            message:"Business only"
+            message:
+            "Business only"
         });
 
     }
@@ -69,111 +76,34 @@ function businessOnly(req,res,next){
 
 
 /* ==========================================
-HELPERS
+EMAIL
 ========================================== */
-function isNigeria(country){
-
-    return country === "NG";
-
-}
-
-
-function ngnToUsd(ngn){
-
-    return Number(
-        (ngn / 1600)
-        .toFixed(3)
-    );
-
-}
-
-
-function usdToNgn(usd){
-
-    return Number(
-        (usd * 1600)
-        .toFixed(2)
-    );
-
-}
-
-
-function socialReward(country){
-
-    if(
-        isNigeria(country)
-    ){
-
-        return {
-            currency:"NGN",
-            amount:50,
-            usd:0.036
-        };
-
-    }
-
-    return {
-        currency:"USD",
-        amount:0.036,
-        ngn:50
-    };
-
-}
-
-
-async function sendEmail(
-    email,
-    subject,
-    html
-){
-
-    try{
-
-        await resend
-        .emails
-        .send({
-
-            from:
-            process.env.FROM_EMAIL,
-
-            to:email,
-
-            subject,
-
-            html
-
-        });
-
-    }catch(err){
-
-        console.error(
-            "EMAIL ERROR:",
-            err.message
-        );
-
-    }
-
-}
-
-
 async function sendOTP(
     email,
     otp
 ){
 
-    await sendEmail(
+    await resend
+    .emails
+    .send({
 
-        email,
+        from:
+        process.env.FROM_EMAIL,
 
-        "Verify your Business Account",
+        to:email,
 
-        `
+        subject:
+        "Verify Business",
+
+        html:`
         <h2>SkillEarn</h2>
         <h1>${otp}</h1>
-        <p>Expires in 10 mins</p>
+        <p>
+        Expires in 10 mins
+        </p>
         `
 
-    );
+    });
 
 }
 
@@ -206,25 +136,6 @@ async(req,res)=>{
         } = req.body;
 
 
-        if(
-            !business_name ||
-            !email ||
-            !password
-        ){
-
-            await client.query(
-                "ROLLBACK"
-            );
-
-            return res
-            .status(400)
-            .json({
-                message:"Missing fields"
-            });
-
-        }
-
-
         const exists =
         await client.query(
 
@@ -243,15 +154,9 @@ async(req,res)=>{
             exists.rows.length
         ){
 
-            await client.query(
-                "ROLLBACK"
+            throw new Error(
+                "Email exists"
             );
-
-            return res
-            .status(400)
-            .json({
-                message:"Email already exists"
-            });
 
         }
 
@@ -280,6 +185,7 @@ async(req,res)=>{
                 email,
                 password,
                 country,
+                role,
                 approved,
                 email_verified,
                 otp_code,
@@ -288,6 +194,7 @@ async(req,res)=>{
             VALUES
             (
                 $1,$2,$3,$4,
+                'vendor',
                 false,
                 false,
                 $5,
@@ -298,11 +205,15 @@ async(req,res)=>{
             `,
 
             [
+
                 business_name,
                 email,
                 hash,
+
                 country || "NG",
+
                 otp
+
             ]
 
         );
@@ -315,7 +226,8 @@ async(req,res)=>{
         await client.query(
 
             `
-            INSERT INTO business_wallets
+            INSERT INTO
+            business_wallets
             (
                 vendor_id,
                 balance,
@@ -333,44 +245,10 @@ async(req,res)=>{
 
                 vendorId,
 
-                country === "NG"
+                country ===
+                "NG"
                 ? "NGN"
                 : "USD"
-
-            ]
-
-        );
-
-
-        await client.query(
-
-            `
-            INSERT INTO business_transactions
-            (
-                vendor_id,
-                amount,
-                type,
-                method,
-                reference,
-                status
-            )
-            VALUES
-            (
-                $1,
-                0,
-                'ACCOUNT_CREATED',
-                'SYSTEM',
-                $2,
-                'SUCCESS'
-            )
-            `,
-
-            [
-
-                vendorId,
-
-                "ACC_" +
-                vendorId
 
             ]
 
@@ -395,7 +273,6 @@ async(req,res)=>{
 
         });
 
-
     }catch(err){
 
         await client.query(
@@ -403,7 +280,7 @@ async(req,res)=>{
         );
 
         res
-        .status(500)
+        .status(400)
         .json({
 
             message:
@@ -419,664 +296,7 @@ async(req,res)=>{
 
 });
 
-router.get(
-"/api/business/wallet",
-auth,
-businessOnly,
-async(req,res)=>{
 
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-
-        const result =
-        await pool.query(
-            `
-            SELECT *
-            FROM business_wallets
-            WHERE vendor_id=$1
-            `,
-            [req.user.id]
-        );
-
-
-        res.json(
-            result.rows[0]
-        );
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-const axios = require("axios");
-const crypto = require("crypto");
-
-
-router.post(
-"/api/business/fund-wallet/paystack",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const {
-            amount
-        } = req.body;
-
-
-        const reference =
-        "BW_" +
-        Date.now() +
-        "_" +
-        req.user.id;
-
-
-        const paystack =
-        await axios.post(
-
-            "https://api.paystack.co/transaction/initialize",
-
-            {
-
-                email:req.user.email,
-
-                amount:
-                Number(amount) * 100,
-
-                reference
-
-            },
-
-            {
-
-                headers:{
-
-                    Authorization:
-                    `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
-
-                }
-
-            }
-
-        );
-
-
-        res.json({
-
-            reference,
-
-            authorization_url:
-            paystack.data
-            .data
-            .authorization_url
-
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-
-            message:err.message
-
-        });
-
-    }
-
-});
-
-router.post(
-"/api/business/paystack/webhook",
-express.raw({
-    type:"application/json"
-}),
-async(req,res)=>{
-
-    const signature =
-    req.headers["x-paystack-signature"];
-
-
-    const hash =
-    crypto
-    .createHmac(
-        "sha512",
-        process.env.PAYSTACK_SECRET_KEY
-    )
-    .update(req.body)
-    .digest("hex");
-
-
-    if(hash !== signature){
-
-        return res
-        .status(401)
-        .end();
-
-    }
-
-
-    const event =
-    JSON.parse(
-        req.body.toString()
-    );
-
-
-    if(
-        event.event !==
-        "charge.success"
-    ){
-
-        return res
-        .sendStatus(200);
-
-    }
-
-
-    const pool =
-    req.app.locals.pool;
-
-
-    const data =
-    event.data;
-
-
-    const reference =
-    data.reference;
-
-
-    const amount =
-    Number(
-        data.amount
-    ) / 100;
-
-
-    const vendorId =
-    Number(
-        reference
-        .split("_")[2]
-    );
-
-
-    try{
-
-        const exists =
-        await pool.query(
-
-            `
-            SELECT id
-            FROM business_transactions
-            WHERE reference=$1
-            `,
-
-            [reference]
-
-        );
-
-
-        if(
-            exists.rows.length
-        ){
-
-            return res
-            .sendStatus(200);
-
-        }
-
-
-        await pool.query("BEGIN");
-
-
-        await pool.query(
-
-            `
-            UPDATE business_wallets
-            SET balance=
-            balance+$1
-            WHERE vendor_id=$2
-            `,
-
-            [
-                amount,
-                vendorId
-            ]
-
-        );
-
-
-        await pool.query(
-
-            `
-            INSERT INTO business_transactions
-            (
-                vendor_id,
-                amount,
-                type,
-                method,
-                reference,
-                status
-            )
-            VALUES
-            (
-                $1,$2,
-                'FUND',
-                'PAYSTACK',
-                $3,
-                'SUCCESS'
-            )
-            `,
-
-            [
-                vendorId,
-                amount,
-                reference
-            ]
-
-        );
-
-
-        await pool.query(
-            "COMMIT"
-        );
-
-
-        res.sendStatus(200);
-
-    }catch(err){
-
-        await pool.query(
-            "ROLLBACK"
-        );
-
-        res.sendStatus(500);
-
-    }
-
-});
-
-router.post(
-"/api/business/fund-wallet/crypto",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const axios =
-        require("axios");
-
-        const {
-            amount,
-            coin
-        } = req.body;
-
-
-        const reference =
-        "BC_" +
-        Date.now() +
-        "_" +
-        req.user.id;
-
-
-        const payment =
-        await axios.post(
-
-            "https://api.nowpayments.io/v1/payment",
-
-            {
-
-                price_amount:amount,
-                price_currency:"usd",
-
-                pay_currency:
-                coin.toLowerCase(),
-
-                order_id:
-                reference
-
-            },
-
-            {
-
-                headers:{
-
-                    "x-api-key":
-                    process.env
-                    .NOWPAYMENTS_API_KEY
-
-                }
-
-            }
-
-        );
-
-
-        res.json({
-
-            reference,
-
-            wallet_address:
-            payment.data
-            .pay_address,
-
-            amount:
-            payment.data
-            .pay_amount,
-
-            coin:
-            payment.data
-            .pay_currency
-
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-router.post(
-"/api/business/crypto/webhook",
-express.json(),
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-
-        const event =
-        req.body;
-
-
-        const secret =
-        req.headers[
-            "x-nowpayments-sig"
-        ];
-
-
-        if(!secret){
-
-            return res
-            .status(401)
-            .end();
-
-        }
-
-
-        if(
-            event.payment_status !==
-            "finished"
-        ){
-
-            return res
-            .sendStatus(200);
-
-        }
-
-
-        const reference =
-        event.order_id;
-
-
-        const amount =
-        Number(
-            event.price_amount
-        );
-
-
-        const vendorId =
-        Number(
-            reference
-            .split("_")[2]
-        );
-
-
-        const exists =
-        await pool.query(
-
-            `
-            SELECT id
-            FROM business_transactions
-            WHERE reference=$1
-            `,
-
-            [reference]
-
-        );
-
-
-        if(
-            exists.rows.length
-        ){
-
-            return res
-            .sendStatus(200);
-
-        }
-
-
-        await pool.query(
-            "BEGIN"
-        );
-
-
-        await pool.query(
-
-            `
-            UPDATE business_wallets
-            SET balance=
-            balance+$1
-            WHERE vendor_id=$2
-            `,
-
-            [
-                amount,
-                vendorId
-            ]
-
-        );
-
-
-        await pool.query(
-
-            `
-            INSERT INTO business_transactions
-            (
-                vendor_id,
-                amount,
-                type,
-                method,
-                reference,
-                status
-            )
-            VALUES
-            (
-                $1,$2,
-                'FUND',
-                'CRYPTO',
-                $3,
-                'SUCCESS'
-            )
-            `,
-
-            [
-                vendorId,
-                amount,
-                reference
-            ]
-
-        );
-
-
-        await pool.query(
-            "COMMIT"
-        );
-
-
-        res.sendStatus(200);
-
-    }catch(err){
-
-        await pool.query(
-            "ROLLBACK"
-        );
-
-        res.sendStatus(500);
-
-    }
-
-});
-
-/* ==========================================
-APPROVE FREELANCE
-========================================== */
-
-router.post(
-"/api/business/approve-freelance",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        await pool.query(
-
-            `
-            UPDATE freelance_applications
-            SET status='APPROVED'
-            WHERE
-            id=$1
-            AND vendor_id=$2
-            `,
-
-            [
-                req.body.application_id,
-                req.user.id
-            ]
-
-        );
-
-        res.json({
-            message:"Freelance approved"
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-HIRING APPROVAL
-========================================== */
-router.post(
-"/api/business/approve-hiring",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        await pool.query(
-
-            `
-            UPDATE hiring_applications
-            SET status='APPROVED'
-            WHERE
-            id=$1
-            AND vendor_id=$2
-            `,
-
-            [
-                req.body.application_id,
-                req.user.id
-            ]
-
-        );
-
-        res.json({
-            message:"Hiring approved"
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-APPROVE INFLUENCE
-========================================== */
- router.post(
-"/api/business/approve-influencer",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        await pool.query(
-
-            `
-            UPDATE influencer_applications
-            SET status='APPROVED'
-            WHERE
-            id=$1
-            AND vendor_id=$2
-            `,
-
-            [
-                req.body.application_id,
-                req.user.id
-            ]
-
-        );
-
-        res.json({
-            message:"Influencer approved"
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});               
 /* ==========================================
 VERIFY EMAIL
 ========================================== */
@@ -1122,8 +342,10 @@ async(req,res)=>{
             return res
             .status(400)
             .json({
+
                 message:
-                "Invalid or expired OTP"
+                "Invalid OTP"
+
             });
 
         }
@@ -1148,17 +370,19 @@ async(req,res)=>{
         res.json({
 
             message:
-            "Email verified. Await admin approval."
+            "Verified"
 
         });
-
 
     }catch(err){
 
         res
         .status(500)
         .json({
-            message:err.message
+
+            message:
+            err.message
+
         });
 
     }
@@ -1202,11 +426,9 @@ async(req,res)=>{
             !result.rows.length
         ){
 
-            return res
-            .status(400)
-            .json({
-                message:"Invalid login"
-            });
+            throw new Error(
+                "Invalid login"
+            );
 
         }
 
@@ -1217,32 +439,19 @@ async(req,res)=>{
 
         const valid =
         await bcrypt.compare(
+
             password,
+
             vendor.password
+
         );
 
 
         if(!valid){
 
-            return res
-            .status(400)
-            .json({
-                message:"Invalid login"
-            });
-
-        }
-
-
-        if(
-            !vendor.email_verified
-        ){
-
-            return res
-            .status(403)
-            .json({
-                message:
-                "Verify email first"
-            });
+            throw new Error(
+                "Invalid login"
+            );
 
         }
 
@@ -1251,12 +460,9 @@ async(req,res)=>{
             !vendor.approved
         ){
 
-            return res
-            .status(403)
-            .json({
-                message:
+            throw new Error(
                 "Await admin approval"
-            });
+            );
 
         }
 
@@ -1266,17 +472,28 @@ async(req,res)=>{
 
             {
 
-                id:vendor.id,
-                email:vendor.email,
-                role:"vendor",
-                country:vendor.country
+                id:
+                vendor.id,
+
+                email:
+                vendor.email,
+
+                role:
+                "vendor",
+
+                country:
+                vendor.country
 
             },
 
-            process.env.JWT_SECRET,
+            process.env
+            .JWT_SECRET,
 
             {
-                expiresIn:"7d"
+
+                expiresIn:
+                "7d"
+
             }
 
         );
@@ -1284,34 +501,101 @@ async(req,res)=>{
 
         res.json({
 
-    message:
-    "Login successful",
+            token,
 
-    token,
+            vendor
 
-    vendor:{
+        });
 
-        id:vendor.id,
+    }catch(err){
 
-        business_name:
-        vendor.business_name,
+        res
+        .status(400)
+        .json({
 
-        email:
-        vendor.email,
+            message:
+            err.message
 
-        country:
-        vendor.country
+        });
 
     }
 
 });
 
 
+/* ==========================================
+WALLET
+========================================== */
+router.get(
+"/api/business/wallet",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const result =
+    await pool.query(
+
+        `
+        SELECT *
+        FROM business_wallets
+        WHERE vendor_id=$1
+        `,
+
+        [req.user.id]
+
+    );
+
+
+    res.json(
+        result.rows[0]
+    );
+
+});
+
+module.exports =
+router;
+
+/* ==========================================
+WALLET TRANSACTIONS
+========================================== */
+router.get(
+"/api/business/transactions",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM business_transactions
+            WHERE vendor_id=$1
+            ORDER BY id DESC
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        res.json(
+            result.rows
+        );
+
     }catch(err){
 
-        res
-        .status(500)
-        .json({
+        res.status(500).json({
             message:err.message
         });
 
@@ -1321,568 +605,382 @@ async(req,res)=>{
 
 
 /* ==========================================
-FORGOT PASSWORD
+FUND WALLET (PAYSTACK)
 ========================================== */
 router.post(
-"/api/business/forgot-password",
+"/api/business/fund-wallet/paystack",
+auth,
+businessOnly,
 async(req,res)=>{
 
     try{
 
-        const pool =
-        req.app.locals.pool;
-
         const {
-            email
+            amount
         } = req.body;
 
 
-        const result =
-        await pool.query(
-
-            `
-            SELECT id
-            FROM vendors
-            WHERE email=$1
-            `,
-
-            [email]
-
-        );
-
-
         if(
-            !result.rows.length
-        ){
-
-            return res.json({
-                message:"OTP sent"
-            });
-
-        }
-
-
-        const otp =
-        Math.floor(
-            100000 +
-            Math.random()*900000
-        ).toString();
-
-
-
-
-        await pool.query(
-
-            `
-            UPDATE vendors
-            SET
-            reset_otp=$1,
-            reset_otp_expires=
-            NOW()+INTERVAL '10 minutes'
-            WHERE email=$2
-            `,
-
-            [
-                otp,
-                email
-            ]
-
-        );
-
-
-
-
-        await sendEmail(
-
-            email,
-
-            "Reset Password",
-
-            `
-            <h2>SkillEarn</h2>
-            <p>Password reset code:</p>
-            <h1>${otp}</h1>
-            `
-
-        );
-
-
-
-
-        res.json({
-            message:"OTP sent"
-        });
-
-
-    }catch(err){
-
-        res
-        .status(500)
-        .json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-RESET PASSWORD
-========================================== */
-router.post(
-"/api/business/reset-password",
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        const {
-            email,
-            otp,
-            password
-        } = req.body;
-
-
-
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT id
-            FROM vendors
-            WHERE
-            email=$1
-            AND reset_otp=$2
-            AND reset_otp_expires > NOW()
-            `,
-
-            [
-                email,
-                otp
-            ]
-
-        );
-
-
-
-
-        if(
-            !result.rows.length
+            !amount ||
+            Number(amount) <= 0
         ){
 
             return res
             .status(400)
             .json({
                 message:
-                "Invalid or expired OTP"
+                "Invalid amount"
             });
 
         }
 
 
+        const reference =
+        "BW_" +
+        Date.now() +
+        "_" +
+        req.user.id;
 
 
-        const hash =
-        await bcrypt.hash(
-            password,
-            10
+        const paystack =
+        await axios.post(
+
+            "https://api.paystack.co/transaction/initialize",
+
+            {
+
+                email:
+                req.user.email,
+
+                amount:
+                Number(amount) * 100,
+
+                reference
+
+            },
+
+            {
+
+                headers:{
+
+                    Authorization:
+                    `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+
+                }
+
+            }
+
         );
 
 
+        res.json({
+
+            reference,
+
+            authorization_url:
+
+            paystack
+            .data
+            .data
+            .authorization_url
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+
+            message:
+            err.message
+
+        });
+
+    }
+
+});
 
 
-        await pool.query(
+/* ==========================================
+PAYSTACK WEBHOOK
+========================================== */
+router.post(
+"/api/business/paystack/webhook",
+
+express.raw({
+    type:"application/json"
+}),
+
+async(req,res)=>{
+
+    const signature =
+    req.headers[
+        "x-paystack-signature"
+    ];
+
+
+    const hash =
+    crypto
+    .createHmac(
+
+        "sha512",
+
+        process.env
+        .PAYSTACK_SECRET_KEY
+
+    )
+    .update(req.body)
+    .digest("hex");
+
+
+    if(
+        hash !== signature
+    ){
+
+        return res
+        .status(401)
+        .end();
+
+    }
+
+
+    const event =
+    JSON.parse(
+        req.body.toString()
+    );
+
+
+    if(
+        event.event !==
+        "charge.success"
+    ){
+
+        return res
+        .sendStatus(200);
+
+    }
+
+
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
+    try{
+
+        const reference =
+        event.data.reference;
+
+
+        const amount =
+        Number(
+            event.data.amount
+        ) / 100;
+
+
+        const vendorId =
+        Number(
+
+            reference
+            .split("_")[2]
+
+        );
+
+
+        const exists =
+        await client.query(
 
             `
-            UPDATE vendors
-            SET
-            password=$1,
-            reset_otp=NULL,
-            reset_otp_expires=NULL
-            WHERE email=$2
+            SELECT id
+            FROM business_transactions
+            WHERE reference=$1
+            `,
+
+            [reference]
+
+        );
+
+
+        if(
+            exists.rows.length
+        ){
+
+            client.release();
+
+            return res
+            .sendStatus(200);
+
+        }
+
+
+        await client.query(
+            "BEGIN"
+        );
+
+
+        await client.query(
+
+            `
+            UPDATE
+            business_wallets
+            SET balance=
+            balance+$1
+            WHERE vendor_id=$2
             `,
 
             [
-                hash,
-                email
+                amount,
+                vendorId
             ]
 
         );
 
 
+        await client.query(
+
+            `
+            INSERT INTO
+            business_transactions
+            (
+                vendor_id,
+                amount,
+                type,
+                method,
+                reference,
+                status
+            )
+            VALUES
+            (
+                $1,$2,
+                'FUND',
+                'PAYSTACK',
+                $3,
+                'SUCCESS'
+            )
+            `,
+
+            [
+
+                vendorId,
+                amount,
+                reference
+
+            ]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
+        res.sendStatus(200);
+
+    }catch(err){
+
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res.sendStatus(500);
+
+    }finally{
+
+        client.release();
+
+    }
+
+});
+
+
+/* ==========================================
+FUND WALLET (CRYPTO)
+========================================== */
+router.post(
+"/api/business/fund-wallet/crypto",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    try{
+
+        const {
+            amount,
+            coin
+        } = req.body;
+
+
+        const reference =
+        "BC_" +
+        Date.now() +
+        "_" +
+        req.user.id;
+
+
+        const payment =
+        await axios.post(
+
+            "https://api.nowpayments.io/v1/payment",
+
+            {
+
+                price_amount:
+                amount,
+
+                price_currency:
+                "usd",
+
+                pay_currency:
+                coin.toLowerCase(),
+
+                order_id:
+                reference
+
+            },
+
+            {
+
+                headers:{
+
+                    "x-api-key":
+
+                    process.env
+                    .NOWPAYMENTS_API_KEY
+
+                }
+
+            }
+
+        );
 
 
         res.json({
 
+            reference,
+
+            wallet_address:
+
+            payment.data
+            .pay_address,
+
+            amount:
+
+            payment.data
+            .pay_amount,
+
+            coin:
+
+            payment.data
+            .pay_currency
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
             message:
-            "Password updated"
-
-        });
-
-
-    }catch(err){
-
-        res
-        .status(500)
-        .json({
-            message:err.message
-        });
-
-    }
-
-});
-
-/* ==========================================
-DASHBOARD
-========================================== */
-router.get(
-"/api/business/dashboard",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        const vendorId =
-        req.user.id;
-
-
-        const payments =
-        await pool.query(
-
-            `
-            SELECT
-            COALESCE(
-                SUM(escrow_amount),
-                0
-            ) AS escrow,
-
-            COALESCE(
-                SUM(amount),
-                0
-            ) AS total_spent
-
-            FROM payments
-            WHERE vendor_id=$1
-            `,
-
-            [vendorId]
-
-        );
-
-
-        const social =
-        await pool.query(
-            `
-            SELECT COUNT(*)
-            FROM social_tasks
-            WHERE vendor_id=$1
-            `,
-            [vendorId]
-        );
-
-
-        const freelance =
-        await pool.query(
-            `
-            SELECT COUNT(*)
-            FROM freelance_jobs
-            WHERE vendor_id=$1
-            `,
-            [vendorId]
-        );
-
-
-        const hiring =
-        await pool.query(
-            `
-            SELECT COUNT(*)
-            FROM hiring_jobs
-            WHERE vendor_id=$1
-            `,
-            [vendorId]
-        );
-
-
-        const influencer =
-        await pool.query(
-            `
-            SELECT COUNT(*)
-            FROM influencer_jobs
-            WHERE vendor_id=$1
-            `,
-            [vendorId]
-        );
-
-
-        res.json({
-
-            escrow:
-            Number(
-                payments.rows[0]
-                .escrow
-            ),
-
-            total_spent:
-            Number(
-                payments.rows[0]
-                .total_spent
-            ),
-
-            social_tasks:
-            Number(
-                social.rows[0]
-                .count
-            ),
-
-            freelance_jobs:
-            Number(
-                freelance.rows[0]
-                .count
-            ),
-
-            hiring_jobs:
-            Number(
-                hiring.rows[0]
-                .count
-            ),
-
-            influencer_jobs:
-            Number(
-                influencer.rows[0]
-                .count
-            )
-
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-PAYMENTS
-========================================== */
-router.get(
-"/api/business/payments",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT *
-            FROM payments
-            WHERE vendor_id=$1
-            ORDER BY id DESC
-            `,
-
-            [req.user.id]
-
-        );
-
-
-        res.json(
-            result.rows
-        );
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-NOTIFICATIONS
-========================================== */
-router.get(
-"/api/business/notifications",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT *
-            FROM notifications
-            WHERE vendor_id=$1
-            ORDER BY id DESC
-            `,
-
-            [req.user.id]
-
-        );
-
-
-        res.json(
-            result.rows
-        );
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-SUBMISSIONS FOR SOCIAL TASK
-========================================== */
-router.get(
-"/api/business/social-submissions",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT
-
-            s.*,
-
-            u.name,
-            t.title
-
-            FROM submissions s
-
-            JOIN users u
-            ON u.id=s.user_id
-
-            JOIN social_tasks t
-            ON t.id=s.task_id
-
-            WHERE
-            t.vendor_id=$1
-
-            ORDER BY s.id DESC
-            `,
-
-            [req.user.id]
-
-        );
-
-
-        res.json(
-            result.rows
-        );
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
-
-
-/* ==========================================
-ANALYTICS
-========================================== */
-router.get(
-"/api/business/analytics",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-
-        const vendorId =
-        req.user.id;
-
-
-        const result =
-        await pool.query(
-
-            `
-            SELECT
-            COALESCE(
-                SUM(amount),
-                0
-            ) AS total_spent,
-
-            COUNT(*) AS payments
-
-            FROM payments
-            WHERE vendor_id=$1
-            `,
-
-            [vendorId]
-
-        );
-
-
-        res.json({
-
-            total_spent:
-            Number(
-                result.rows[0]
-                .total_spent
-            ),
-
-            payments:
-            Number(
-                result.rows[0]
-                .payments
-            )
-
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
+            err.message
         });
 
     }
@@ -1892,172 +990,368 @@ async(req,res)=>{
 /* ==========================================
 PRICING
 ========================================== */
-router.get(
-"/api/business/pricing",
-auth,
-businessOnly,
-async(req,res)=>{
 
-    const country =
-    req.user.country;
+function isNigeria(country){
+    return country === "NG";
+}
 
+function ngnToUsd(ngn){
+    return Number(
+        (ngn / 1600).toFixed(2)
+    );
+}
 
-    res.json({
+const PRICING = {
 
-        social:
-        socialReward(country),
+    SOCIAL_PER_USER:50,
 
-        freelance:{
+    FREELANCE_MIN:2000,
 
-            min:
-            isNigeria(country)
-            ? usdToNgn(4)
-            : 4,
+    HIRING_FIXED:2000,
 
-            max:
-            isNigeria(country)
-            ? usdToNgn(100)
-            : 100
+    INFLUENCER_MIN:10000
 
-        },
-
-        influencer:{
-
-            min:
-            isNigeria(country)
-            ? usdToNgn(10)
-            : 10,
-
-            max:
-            isNigeria(country)
-            ? usdToNgn(50)
-            : 50
-
-        },
-
-        hiring:
-
-        isNigeria(country)
-        ? 2000
-        : ngnToUsd(2000)
-
-    });
-
-});
+};
 
 
-/* ==========================================
-CREATE CAMPAIGN
-========================================== */
+function localPrice(
+    amount,
+    country
+){
+
+    if(isNigeria(country)){
+        return amount;
+    }
+
+    return ngnToUsd(
+        amount
+    );
+
+        }
+
 router.post(
-"/api/business/create-campaign",
-auth,
-businessOnly,
+"/api/business/crypto/webhook",
+express.json(),
 async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
 
     try{
 
-        const {
-            purpose,
-            category,
-            title,
-            description,
-            link,
-            qty
-        } = req.body;
-
+        const event =
+        req.body;
 
         if(
-            !purpose ||
-            !category ||
-            !title
+            event.payment_status !==
+            "finished"
         ){
 
             return res
-            .status(400)
-            .json({
-                message:"Missing fields"
-            });
+            .sendStatus(200);
 
         }
 
+        const reference =
+        event.order_id;
 
-        if(
-            purpose === "social" &&
-            !link
-        ){
-
-            return res
-            .status(400)
-            .json({
-                message:
-                "Campaign link required"
-            });
-
-        }
-
-
-        const workers =
+        const vendorId =
         Number(
-            qty || 1
+            reference
+            .split("_")[2]
         );
 
+        const amount =
+        Number(
+            event.price_amount
+        );
+
+        await client.query(
+            "BEGIN"
+        );
+
+        const exists =
+        await client.query(
+
+            `
+            SELECT id
+            FROM business_transactions
+            WHERE reference=$1
+            `,
+
+            [reference]
+
+        );
 
         if(
-            workers < 1
+            exists.rows.length
         ){
 
+            await client.query(
+                "ROLLBACK"
+            );
+
             return res
-            .status(400)
-            .json({
-                message:
-                "Invalid quantity"
-            });
+            .sendStatus(200);
 
         }
 
+        await client.query(
 
-        res.json({
+            `
+            UPDATE business_wallets
+            SET balance=
+            balance+$1
+            WHERE vendor_id=$2
+            `,
 
-            message:
-            "Proceed to payment",
+            [
+                amount,
+                vendorId
+            ]
 
-            payment_payload:{
+        );
 
-                purpose,
-                category,
-                title,
+        await client.query(
 
-                description:
-                description || "",
+            `
+            INSERT INTO
+            business_transactions
+            (
+                vendor_id,
+                amount,
+                type,
+                method,
+                reference,
+                status
+            )
+            VALUES
+            (
+                $1,$2,
+                'FUND',
+                'CRYPTO',
+                $3,
+                'SUCCESS'
+            )
+            `,
 
-                link:
-                link || "",
+            [
+                vendorId,
+                amount,
+                reference
+            ]
 
-                qty:
-                workers
+        );
 
-            }
+        await client.query(
+            "COMMIT"
+        );
 
-        });
-
+        res.sendStatus(200);
 
     }catch(err){
 
-        res
-        .status(500)
-        .json({
-            message:err.message
-        });
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res.sendStatus(500);
+
+    }finally{
+
+        client.release();
 
     }
 
 });
 
+router.post(
+"/api/business/create-social-task",
+auth,
+businessOnly,
+async(req,res)=>{
 
-/* ==========================================
-APPROVE SUBMISSION
-========================================== */
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
+    try{
+
+        await client.query(
+            "BEGIN"
+        );
+
+        const {
+
+            title,
+            description,
+            link,
+            qty
+
+        } = req.body;
+
+
+        const reward =
+        localPrice(
+
+            PRICING
+            .SOCIAL_PER_USER,
+
+            req.user.country
+
+        );
+
+
+        const total =
+        reward * qty;
+
+
+        const wallet =
+        await client.query(
+
+            `
+            SELECT *
+            FROM business_wallets
+            WHERE vendor_id=$1
+            FOR UPDATE
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        if(
+
+            Number(
+                wallet.rows[0]
+                .balance
+            ) < total
+
+        ){
+
+            throw new Error(
+                "Insufficient wallet"
+            );
+
+        }
+
+
+        await client.query(
+
+            `
+            UPDATE business_wallets
+            SET balance=
+            balance-$1
+            WHERE vendor_id=$2
+            `,
+
+            [
+                total,
+                req.user.id
+            ]
+
+        );
+
+
+        const task =
+        await client.query(
+
+            `
+            INSERT INTO social_tasks
+            (
+                vendor_id,
+                title,
+                description,
+                link,
+                reward,
+                qty,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,$4,
+                $5,$6,
+                'ACTIVE'
+            )
+            RETURNING id
+            `,
+
+            [
+
+                req.user.id,
+
+                title,
+
+                description,
+
+                link,
+
+                reward,
+
+                qty
+
+            ]
+
+        );
+
+
+        await client.query(
+
+            `
+            INSERT INTO escrow
+            (
+                task_id,
+                remaining_amount
+            )
+            VALUES
+            (
+                $1,$2
+            )
+            `,
+
+            [
+
+                task.rows[0].id,
+
+                total
+
+            ]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+        res.json({
+            message:"Task created"
+        });
+
+    }catch(err){
+
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res.status(400).json({
+            message:err.message
+        });
+
+    }finally{
+
+        client.release();
+
+    }
+
+});
+
 router.post(
 "/api/business/approve-submission",
 auth,
@@ -2076,7 +1370,6 @@ async(req,res)=>{
             "BEGIN"
         );
 
-
         const sub =
         await client.query(
 
@@ -2088,38 +1381,14 @@ async(req,res)=>{
             `,
 
             [
-                req.body
-                .submission_id
+                req.body.submission_id
             ]
 
         );
 
 
-        if(
-            !sub.rows.length
-        ){
-
-            throw new Error(
-                "Submission not found"
-            );
-
-        }
-
-
         const submission =
         sub.rows[0];
-
-
-        if(
-            submission.status ===
-            "APPROVED"
-        ){
-
-            throw new Error(
-                "Already approved"
-            );
-
-        }
 
 
         const task =
@@ -2127,7 +1396,7 @@ async(req,res)=>{
 
             `
             SELECT *
-            FROM tasks
+            FROM social_tasks
             WHERE id=$1
             `,
 
@@ -2231,14 +1500,9 @@ async(req,res)=>{
             "COMMIT"
         );
 
-
         res.json({
-
-            message:
-            "User paid successfully"
-
+            message:"Approved"
         });
-
 
     }catch(err){
 
@@ -2246,9 +1510,7 @@ async(req,res)=>{
             "ROLLBACK"
         );
 
-        res
-        .status(400)
-        .json({
+        res.status(400).json({
             message:err.message
         });
 
@@ -2260,4 +1522,551 @@ async(req,res)=>{
 
 });
 
-module.exports = router;
+router.post(
+"/api/business/reject-submission",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+    await pool.query(
+
+        `
+        UPDATE submissions
+        SET status='REJECTED'
+        WHERE id=$1
+        `,
+
+        [
+            req.body.submission_id
+        ]
+
+    );
+
+    res.json({
+        message:"Rejected"
+    });
+
+});
+
+router.post(
+"/api/business/create-freelance",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
+    try{
+
+        await client.query(
+            "BEGIN"
+        );
+
+        const {
+
+            title,
+            description,
+            budget
+
+        } = req.body;
+
+
+        const minBudget =
+        localPrice(
+            PRICING.FREELANCE_MIN,
+            req.user.country
+        );
+
+
+        if(
+            Number(budget) <
+            minBudget
+        ){
+
+            throw new Error(
+                "Below minimum"
+            );
+
+        }
+
+
+        const wallet =
+        await client.query(
+
+            `
+            SELECT *
+            FROM business_wallets
+            WHERE vendor_id=$1
+            FOR UPDATE
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        if(
+
+            Number(
+                wallet.rows[0]
+                .balance
+            ) < budget
+
+        ){
+
+            throw new Error(
+                "Insufficient wallet"
+            );
+
+        }
+
+
+        await client.query(
+
+            `
+            UPDATE business_wallets
+            SET balance=
+            balance-$1
+            WHERE vendor_id=$2
+            `,
+
+            [
+                budget,
+                req.user.id
+            ]
+
+        );
+
+
+        await client.query(
+
+            `
+            INSERT INTO
+            freelance_jobs
+            (
+                vendor_id,
+                title,
+                description,
+                budget,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,$4,
+                'ACTIVE'
+            )
+            `,
+
+            [
+
+                req.user.id,
+
+                title,
+
+                description,
+
+                budget
+
+            ]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+        res.json({
+            message:"Freelance created"
+        });
+
+    }catch(err){
+
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res.status(400).json({
+            message:err.message
+        });
+
+    }finally{
+
+        client.release();
+
+    }
+
+});
+
+router.post(
+"/api/business/create-hiring",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
+    try{
+
+        await client.query(
+            "BEGIN"
+        );
+
+        const {
+
+            title,
+            description
+
+        } = req.body;
+
+
+        const price =
+        localPrice(
+            PRICING.HIRING_FIXED,
+            req.user.country
+        );
+
+
+        const wallet =
+        await client.query(
+
+            `
+            SELECT *
+            FROM business_wallets
+            WHERE vendor_id=$1
+            FOR UPDATE
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        if(
+
+            Number(
+                wallet.rows[0]
+                .balance
+            ) < price
+
+        ){
+
+            throw new Error(
+                "Insufficient wallet"
+            );
+
+        }
+
+
+        await client.query(
+
+            `
+            UPDATE business_wallets
+            SET balance=
+            balance-$1
+            WHERE vendor_id=$2
+            `,
+
+            [
+                price,
+                req.user.id
+            ]
+
+        );
+
+
+        await client.query(
+
+            `
+            INSERT INTO
+            hiring_jobs
+            (
+                vendor_id,
+                title,
+                description,
+                budget,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,$4,
+                'ACTIVE'
+            )
+            `,
+
+            [
+
+                req.user.id,
+
+                title,
+
+                description,
+
+                price
+
+            ]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+        res.json({
+            message:"Hiring created"
+        });
+
+    }catch(err){
+
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res.status(400).json({
+            message:err.message
+        });
+
+    }finally{
+
+        client.release();
+
+    }
+
+});
+
+router.post(
+"/api/business/create-influencer",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+    const client =
+    await pool.connect();
+
+    try{
+
+        await client.query(
+            "BEGIN"
+        );
+
+        const {
+
+            title,
+            description,
+            budget
+
+        } = req.body;
+
+
+        const minBudget =
+        localPrice(
+            PRICING
+            .INFLUENCER_MIN,
+            req.user.country
+        );
+
+
+        if(
+            Number(budget) <
+            minBudget
+        ){
+
+            throw new Error(
+                "Below minimum"
+            );
+
+        }
+
+
+        const wallet =
+        await client.query(
+
+            `
+            SELECT *
+            FROM business_wallets
+            WHERE vendor_id=$1
+            FOR UPDATE
+            `,
+
+            [req.user.id]
+
+        );
+
+
+        if(
+
+            Number(
+                wallet.rows[0]
+                .balance
+            ) < budget
+
+        ){
+
+            throw new Error(
+                "Insufficient wallet"
+            );
+
+        }
+
+
+        await client.query(
+
+            `
+            UPDATE business_wallets
+            SET balance=
+            balance-$1
+            WHERE vendor_id=$2
+            `,
+
+            [
+                budget,
+                req.user.id
+            ]
+
+        );
+
+
+        await client.query(
+
+            `
+            INSERT INTO
+            influencer_jobs
+            (
+                vendor_id,
+                title,
+                description,
+                budget,
+                status
+            )
+            VALUES
+            (
+                $1,$2,$3,$4,
+                'ACTIVE'
+            )
+            `,
+
+            [
+
+                req.user.id,
+
+                title,
+
+                description,
+
+                budget
+
+            ]
+
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+        res.json({
+            message:"Influencer created"
+        });
+
+    }catch(err){
+
+        await client.query(
+            "ROLLBACK"
+        );
+
+        res.status(400).json({
+            message:err.message
+        });
+
+    }finally{
+
+        client.release();
+
+    }
+
+});
+
+router.get(
+"/api/business/applications",
+auth,
+businessOnly,
+async(req,res)=>{
+
+    const pool =
+    req.app.locals.pool;
+
+
+    const freelance =
+    await pool.query(
+
+        `
+        SELECT *
+        FROM freelance_applications
+        WHERE vendor_id=$1
+        ORDER BY id DESC
+        `,
+
+        [req.user.id]
+
+    );
+
+
+    const hiring =
+    await pool.query(
+
+        `
+        SELECT *
+        FROM hiring_applications
+        WHERE vendor_id=$1
+        ORDER BY id DESC
+        `,
+
+        [req.user.id]
+
+    );
+
+
+    const influencer =
+    await pool.query(
+
+        `
+        SELECT *
+        FROM influencer_applications
+        WHERE vendor_id=$1
+        ORDER BY id DESC
+        `,
+
+        [req.user.id]
+
+    );
+
+
+    res.json({
+
+        freelance:
+        freelance.rows,
+
+        hiring:
+        hiring.rows,
+
+        influencer:
+        influencer.rows
+
+    });
+
+});
