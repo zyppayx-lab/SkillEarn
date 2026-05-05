@@ -225,34 +225,33 @@ async(req,res)=>{
 
         await client.query(
 
-            `
-            INSERT INTO
-            business_wallets
-            (
-                vendor_id,
-                balance,
-                currency
-            )
-            VALUES
-            (
-                $1,
-                0,
-                $2
-            )
-            `,
+    `
+    INSERT INTO
+    business_wallets
+    (
+        vendor_id,
+        balance,
+        currency
+    )
+    VALUES
+    (
+        $1,
+        0,
+        $2
+    )
+    `,
 
-            [
+    [
 
-                vendorId,
+        vendorId,
 
-                country ===
-                "NG"
-                ? "NGN"
-                : "USD"
+        isNigeria(country)
+        ? "NGN"
+        : "USD"
 
-            ]
+    ]
 
-        );
+);
 
 
         await client.query(
@@ -888,6 +887,22 @@ businessOnly,
 async(req,res)=>{
 
     try{
+        
+        if(
+    req.user.country !==
+    "NG"
+){
+
+    return res
+    .status(403)
+    .json({
+
+        message:
+        "Use crypto funding"
+
+    });
+
+        }
 
         const {
             amount
@@ -1178,6 +1193,22 @@ businessOnly,
 async(req,res)=>{
 
     try{
+
+        if(
+    req.user.country ===
+    "NG"
+){
+
+    return res
+    .status(403)
+    .json({
+
+        message:
+        "Use Paystack"
+
+    });
+
+        }
 
         const {
             amount,
