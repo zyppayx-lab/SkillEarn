@@ -1660,38 +1660,16 @@ auth,
 businessOnly,
 async(req,res)=>{
 
-    const pool =
-    req.app.locals.pool;
-
-    const client =
-    await pool.connect();
-
     try{
 
-        await client.query(
-            "BEGIN"
-        );
+        const pool =
+        req.app.locals.pool;
 
-        const sub =
-        await client.query(
-
-            `
-            SELECT *
-            FROM submissions
-            WHERE id=$1
-            FOR UPDATE
-            `,
-
-            [
-                req.body.submission_id
-            ]
-
-        );
-
+        const client =
+        await pool.connect();
 
         const submission =
         sub.rows[0];
-
 
         const task =
         await client.query(
@@ -1707,6 +1685,20 @@ async(req,res)=>{
             ]
 
         );
+
+        res.json({
+            message:"Approved"
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+            message:err.message
+        });
+
+    }
+
+});
 
 router.post(
 "/api/business/approve-submission",
