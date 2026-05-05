@@ -521,6 +521,226 @@ async(req,res)=>{
 
 });
 
+ /* ==========================================
+FORGOT PASSWORD
+========================================== */
+router.post(
+"/api/business/forgot-password",
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const {
+            email
+        } = req.body;
+
+
+        const exists =
+        await pool.query(
+
+            `
+            SELECT id
+            FROM vendors
+            WHERE email=$1
+            `,
+
+            [email]
+
+        );
+
+
+        if(
+            !exists.rows.length
+        ){
+
+            return res
+            .status(404)
+            .json({
+
+                message:
+                "Email not found"
+
+            });
+
+        }
+
+
+        const otp =
+        Math.floor(
+
+            100000 +
+
+            Math.random() *
+
+            900000
+
+        ).toString();
+
+
+        await pool.query(
+
+            `
+            UPDATE vendors
+            SET
+            otp_code=$1,
+            otp_expires=
+            NOW()+INTERVAL
+            '10 minutes'
+            WHERE email=$2
+            `,
+
+            [
+                otp,
+                email
+            ]
+
+        );
+
+
+        await sendOTP(
+            email,
+            otp
+        );
+
+
+        res.json({
+
+            message:
+            "OTP sent"
+
+        });
+
+    }catch(err){
+
+        res
+        .status(500)
+        .json({
+
+            message:
+            err.message
+
+        });
+
+    }
+
+});
+
+
+/* ==========================================
+RESET PASSWORD
+========================================== */
+router.post(
+"/api/business/reset-password",
+async(req,res)=>{
+
+    try{
+
+        const pool =
+        req.app.locals.pool;
+
+        const {
+
+            email,
+            otp,
+            password
+
+        } = req.body;
+
+
+        const result =
+        await pool.query(
+
+            `
+            SELECT id
+            FROM vendors
+            WHERE
+            email=$1
+            AND otp_code=$2
+            AND otp_expires > NOW()
+            `,
+
+            [
+                email,
+                otp
+            ]
+
+        );
+
+
+        if(
+            !result.rows.length
+        ){
+
+            return res
+            .status(400)
+            .json({
+
+                message:
+                "Invalid OTP"
+
+            });
+
+        }
+
+
+        const hash =
+        await bcrypt.hash(
+
+            password,
+
+            10
+
+        );
+
+
+        await pool.query(
+
+            `
+            UPDATE vendors
+            SET
+
+            password=$1,
+
+            otp_code=NULL,
+
+            otp_expires=NULL
+
+            WHERE email=$2
+            `,
+
+            [
+                hash,
+                email
+            ]
+
+        );
+
+
+        res.json({
+
+            message:
+            "Password updated"
+
+        });
+
+    }catch(err){
+
+        res
+        .status(500)
+        .json({
+
+            message:
+            err.message
+
+        });
+
+    }
+
+});           
+
 router.get(
 "/api/business/dashboard",
 auth,
