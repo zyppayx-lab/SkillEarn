@@ -1700,51 +1700,6 @@ async(req,res)=>{
 
 });
 
-router.post(
-"/api/business/approve-submission",
-auth,
-businessOnly,
-async(req,res)=>{
-
-    try{
-
-        const pool =
-        req.app.locals.pool;
-
-        const client =
-        await pool.connect();
-
-        const submission =
-        sub.rows[0];
-
-        const task =
-        await client.query(
-
-            `
-            SELECT *
-            FROM social_tasks
-            WHERE id=$1
-            `,
-
-            [
-                submission.task_id
-            ]
-
-        );
-
-        res.json({
-            message:"Approved"
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-            message:err.message
-        });
-
-    }
-
-});
 
 router.post(
 "/api/business/approve-submission",
